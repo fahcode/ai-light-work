@@ -9,11 +9,11 @@
       { "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/lw.py\" hook prompt", "timeout": 10 }] }
     ],
     "PreToolUse": [
-      { "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+      { "matcher": "Edit|Write|MultiEdit|NotebookEdit|apply_patch",
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/lw.py\" hook pre-edit", "timeout": 10 }] }
     ],
     "PostToolUse": [
-      { "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+      { "matcher": "Edit|Write|MultiEdit|NotebookEdit|apply_patch",
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/lw.py\" hook post-edit", "timeout": 10 }] }
     ],
     "Stop": [

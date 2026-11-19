@@ -32,6 +32,11 @@ export function handleResult(res) {
 }
 export function legacyFallback(x) { return x }
 EOF
+mkdir -p src/ui
+cat > src/ui/page.ts <<'EOF'
+import { handleResult } from "../search/voice";
+export function onVoice(res) { return handleResult(res); }
+EOF
 git add -A && git commit -qm init && git checkout -qb feature/voice
 
 echo "钩子：会话开始"
@@ -97,6 +102,7 @@ out=$(hook stop "{\"cwd\":\"$REPO\"}"); expect "用户回复后恢复收尾检�
 
 echo "技能：lw-review"
 out=$($L score); expect "score 给出级别" "$out" "级别: L"
+expect "一层调用方：本轮没改但调用了改过的函数" "$out" "handleResult → src/ui/page.ts"
 expect "score 列出要核对的约束" "$out" "C-001.2"
 python3 - <<'EOF'
 p = ".light-work/feature-voice.md"; s = open(p).read()
@@ -154,6 +160,9 @@ git add -A && git commit -qm wip
 grep -q "C-002 · 2026-11-20 · bug · settled" .light-work/feature-voice.md && ok "提交后自动转 settled" || fail "自动定稿" "$(grep '^###' .light-work/feature-voice.md)"
 out=$($L lint); expect "定稿后 lint 仍通过" "$out" "台账格式正常"
 grep -q "提交: [0-9a-f]\{7\}" .light-work/feature-voice.md && ok "post-commit 回填 SHA" || fail "回填" "$(grep 提交 .light-work/feature-voice.md)"
+out=$($L why src/search/voice.ts:2); expect "why：行 → 提交 → 条目" "$out" "C-003"
+expect "why：带出意图" "$out" "意图:"
+out=$($L why src/ui/page.ts:2); expect "why：基准分支上的代码" "$out" "基准分支上就有的代码"
 out=$(printf '# 台账改动报告\n> 两次改动\n' | $L view --title "台账改动报告"); expect "从 stdin 生成页面" "$out" ".light-work/feature-voice.html"
 grep -q "台账改动报告" .light-work/feature-voice.html && ok "页面包含报告内容" || fail "页面内容" ""
 [ "$(find .light-work -type d | wc -l | tr -d ' ')" = "1" ] && ok ".light-work 下没有子目录" || fail "出现子目录" "$(find .light-work)"
@@ -170,5 +179,42 @@ hook prompt "{\"cwd\":\"$REPO\",\"prompt\":\"改一下\"}" >/dev/null
 [ -f .light-work/feature-third.md ] && ok "会话中途切分支也自动建台账" || fail "中途切分支" "$(ls .light-work)"
 git checkout -q feature/voice
 out=$($L context); expect "切回来还是原来的台账" "$out" "C-003"
+
+echo "Codex：apply_patch 补丁 / 等待用户时不拦"
+git checkout -qb feature/codex
+hook session-start "{\"cwd\":\"$REPO\"}" >/dev/null
+cat >> .light-work/feature-codex.md <<'EOF'
+### C-001 · 2026-11-20 · change · open · 页面层兜底
+- 意图: 用户："页面上别直接把 null 丢给 handleResult" → 页面层先兜底
+- 约束:
+  - C-001.1 onVoice 收到 undefined 时返回 ok:false reason=none
+- 假设: 无
+- 文件: src/ui/page.ts
+- 提交: (待提交)
+- 验证: ✗ 未验证
+- 过程: R1 用户提出
+- 级别: 待定
+EOF
+codex_edit() { # codex_edit <事件>：模拟 Codex 的 apply_patch（一个补丁改两个文件，相对路径）
+  python3 -c 'import json,sys; print(json.dumps({"cwd": sys.argv[1], "hook_event_name": "PreToolUse", "tool_name": "apply_patch",
+    "tool_input": {"input": "*** Begin Patch\n*** Update File: src/search/voice.ts\n@@\n-x\n+y\n*** Update File: src/ui/page.ts\n@@\n-a\n+b\n*** End Patch\n"}}))' "$REPO" \
+    | python3 "$SCRIPT" hook "$1"
+}
+out=$(codex_edit pre-edit); expect "apply_patch 也能注入约束" "$out" "C-001.1"
+expect "补丁里的每个文件都解析出来" "$out" "改 src/ui/page.ts 前"
+echo 'export function onVoice2(res) { return res ?? { ok: false, reason: "none" }; }' >> src/ui/page.ts
+codex_edit post-edit >/dev/null
+out=$(hook stop "{\"cwd\":\"$REPO\",\"last_assistant_message\":\"改好了一半。空数组也要按失败处理吗？\"}")
+[ -z "$out" ] && ok "AI 最后在问用户时先不拦" || fail "提问时仍拦" "$out"
+out=$(hook stop "{\"cwd\":\"$REPO\",\"last_assistant_message\":\"那我先这样？\"}")
+expect "同一份改动只放过一次" "$out" '"decision": "block"'
+echo '// 再改一点' >> src/ui/page.ts
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"要不要顺便把 legacy 分支也改了？"}]}}' > "$TMP/transcript.jsonl"
+out=$(hook stop "{\"cwd\":\"$REPO\",\"transcript_path\":\"$TMP/transcript.jsonl\"}")
+[ -z "$out" ] && ok "Claude 会话记录里最后在提问也先不拦" || fail "transcript 提问时仍拦" "$out"
+out=$(hook stop "{\"cwd\":\"$REPO\",\"last_assistant_message\":\"改好了，卡片如下。\"}")
+expect "最后不是提问就照常拦" "$out" '"decision": "block"'
+out=$($L why src/ui/page.ts:3); expect "why：未提交的行归到 open 条目" "$out" "还没提交的改动"
+expect "why：未提交的行找到条目" "$out" "C-001 · change · open"
 
 echo; echo "全部通过（$pass 项）"

@@ -1,0 +1,21 @@
+{
+  "name": "ai-light-work",
+  "interface": {
+    "displayName": "ai-light-work"
+  },
+  "plugins": [
+    {
+      "name": "light-work",
+      "source": {
+        "source": "local",
+        "path": "./plugins/light-work"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity",
+      "description": "按分支自动维护的变更台账 + 手术刀式修改 + L0-L3 review 卡片 + 冲突检查与可视化报告"
+    }
+  ]
+}

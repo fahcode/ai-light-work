@@ -76,6 +76,8 @@
 - 改了 ≥30 行逻辑，但没有任何测试改动
 - 改动以删除为主
 
+一层调用方（只展示，不影响级别、不加 ⚠）：签名没变、只改了内部逻辑的函数（最多 8 个），用 `git grep -w` 找本轮没改、也不是测试的文件里谁按名字引用了它，每个函数最多列 5 个文件。只做一层，同名会误报，由 lw-review 打开看一眼再决定要不要写进卡片。
+
 ## 范围
 
 | 参数 | 范围 | 默认用于 |
@@ -108,9 +110,11 @@
 |---|---|---|
 | SessionStart（startup / resume / clear / compact） | `hook session-start` | 把脚本复制到 `~/.light-work/lw.py`（给技能和 git 钩子一个稳定路径）；在需求分支上建台账、起点快照和 post-commit 钩子；注入工作流说明和约束摘要 |
 | UserPromptSubmit | `hook prompt` | 列出 open 条目和轮次；像改代码的消息提醒先记录；第 3 轮提醒先找根因；清除"等待冲突确认"标记 |
-| PreToolUse（Edit / Write / MultiEdit / NotebookEdit） | `hook pre-edit` | 注入这个文件相关的约束，每条只提示一次，并提醒"明确冲突先问"；没有 open 条目时提醒先记录。台账文件本身不触发 |
+| PreToolUse（Edit / Write / MultiEdit / NotebookEdit / Codex 的 apply_patch） | `hook pre-edit` | 文件路径取 `tool_input.file_path`；Codex 没有这个字段，从补丁文本的 `*** Add/Update/Delete File:`、`*** Move to:` 行解析，一个补丁可以改多个文件。注入这个文件相关的约束，每条只提示一次，并提醒"明确冲突先问"；没有 open 条目时提醒先记录。台账文件本身不触发 |
 | PostToolUse（同上） | `hook post-edit` | 标记"本轮有改动" |
-| Stop | `hook stop` | 本轮有改动，且工作区和上次收尾点不同时返回 `decision: block`，要求执行 lw-review。`stop_hook_active` 为真、或正在等用户回答冲突确认（`lw.py ask`）时放行；同一份改动最多拦 2 次 |
+| Stop | `hook stop` | 本轮有改动，且工作区和上次收尾点不同时返回 `decision: block`，要求执行 lw-review。`stop_hook_active` 为真、或正在等用户回答冲突确认（`lw.py ask`）时放行；AI 最后一句以问号结尾时（Codex 读 `last_assistant_message`，Claude Code 读会话记录末尾）视为还在等用户，同一份改动只放过一次；同一份改动最多拦 2 次 |
+
+Codex 和 Claude Code 的钩子协议基本一致（事件名、matcher、`additionalContext`、`decision: block`、`stop_hook_active`），插件钩子里 `CLAUDE_PLUGIN_ROOT` 在 Codex 下也有，所以三家共用一份 `hooks/hooks.json`。差别只有两处：Codex 编辑文件统一走 `apply_patch`；Codex 的钩子要用户在 `/hooks` 里信任后才运行。
 
 钩子出任何异常都只写 stderr、以 0 退出，不会把会话弄坏。设 `LW_DEBUG=1` 可以看到完整报错。
 
@@ -145,6 +149,7 @@ $L next-id
 $L score [范围] [--hunks N] [--json]
 $L checkpoint --entry C-004
 $L ask                            # 冲突闸门提问前
+$L why src/a.ts:42 [src/b.ts:10-20]   # 这行是哪条台账改动引入的
 $L check [范围] [--json]
 $L conflicts [--json]
 $L lint | stats | backfill

@@ -4,9 +4,9 @@
 
 | 插件 | 版本 | 一句话 |
 |---|---|---|
-| [light-work](plugins/light-work) | 0.5.0 | 按分支自动维护变更台账：AI 改代码时自动记下你要什么，像靠谱的同事一样做最小改动，改完按复杂度给你看 review 卡片；需要时手动做冲突检查和可视化报告 |
+| [light-work](plugins/light-work) | 0.6.0 | 按分支自动维护变更台账：AI 改代码时自动记下你要什么，像靠谱的同事一样做最小改动，改完按复杂度给你看 review 卡片；需要时手动做冲突检查和可视化报告 |
 
-支持 **CodeBuddy Code / WorkBuddy** 和 **Claude Code**，两边共用同一份插件。只依赖 Python 3.8+ 和 git。
+支持 **Claude Code**、**Codex** 和 **CodeBuddy Code / WorkBuddy**，共用同一份插件（同一套技能、钩子和脚本）。只依赖 Python 3.8+ 和 git。
 
 ![review 页面示例](docs/review-demo.png)
 
@@ -75,6 +75,17 @@ codebuddy plugin install light-work@ai-light-work
 
 Claude Code 把 `codebuddy` 换成 `claude` 即可。只想在当前会话试用：`codebuddy --plugin-dir /Users/hfh/learn/ai-light-work/plugins/light-work`。
 
+**Codex：**
+
+```bash
+codex plugin marketplace add /Users/hfh/learn/ai-light-work   # 或 fahcode/ai-light-work
+codex plugin add light-work@ai-light-work                     # 或在 Codex 里输入 /plugins 安装
+```
+
+装完开一个新会话，**输入 `/hooks`，把 light-work 的 5 个钩子设为信任**。Codex 不会运行没被信任的钩子；以后 `hooks/hooks.json` 有改动，也要重新信任一次。不信任的话技能还能用，但自动记录、改前注入约束、改完必出卡片都不会生效。
+
+为什么不直接装到通用的 `~/.agents/skills/`：那里只能放技能，放不了钩子，而这个插件靠钩子保证流程不漏；Claude Code 目前也不读这个目录。
+
 **装好就完了。** 在哪个分支上开发就记哪个分支的台账；切到别的分支，自动换成那个分支自己的；切回来，还是原来那份。
 
 ---
@@ -138,7 +149,11 @@ flowchart LR
 | `/lw-report` | **只看台账改动**（功能完成之后的变更和修复）；`/lw-report C-xxx` 只看这一条，并且展开得更详细 | 改动时间线、改动点流程图、阅读顺序、风险、待拍板、**给测试的回归清单** → `.light-work/<分支>.html` |
 | `/lw-branch` | **整个分支**：功能开发 + 后续所有改动 | 整体流程图、阅读顺序、文件清单、风险、**回归清单** → `.light-work/<分支>.html`；`/lw-branch pr` 额外输出可以直接粘贴的 PR 描述 |
 
-在 Claude Code 里，命令会带插件名前缀，显示为 `/light-work:lw-check`，输入 `/lw` 后从补全里选即可。
+调用方式：Claude Code 里是 `/light-work:lw-check`（输入 `/lw` 后从补全里选），Codex 里是 `$lw-check`（或用 `/skills` 选）。
+
+**这三个只能你手动调用，AI 不会自己触发**：Claude Code 靠 `disable-model-invocation`，Codex 靠技能里的 `agents/openai.yaml`（`allow_implicit_invocation: false`）。会自动执行的只有 `lw-record`、`lw-edit`、`lw-review` 这三步。
+
+**查一行代码的来历**（不是命令，修 bug 时 `lw-edit` 会自己用，你也可以直接让 AI 跑）：`python3 ~/.light-work/lw.py why src/a.ts:42` → 这行是哪个提交、哪条台账改动引入的，当时的意图、约束、根因，后来有没有被推翻。还没提交的行，会归到登记了这个文件的 open 条目。
 
 ### 背后的钩子（保证流程不漏）
 
@@ -147,7 +162,7 @@ flowchart LR
 | 会话开始 | 当前分支没有台账就自动建；把工作流和"当前分支状态"摘要告诉 AI |
 | 你发消息 | 像是要改代码，就提醒 AI 先记录；同一条改到第 3 轮时，提醒先找根因；会话中途切了分支，自动换台账 |
 | AI 编辑某个文件前 | 只把**这个文件相关的**约束告诉 AI，每条只提示一次 |
-| AI 准备结束回复 | 改了代码却还没出卡片，就拦下来要求先收尾（同一份改动最多拦两次）；AI 正在等你回答冲突确认时不拦 |
+| AI 准备结束回复 | 改了代码却还没出卡片，就拦下来要求先收尾（同一份改动最多拦两次）。不拦的情况：AI 正在等你回答冲突确认；AI 最后一句是在问你（以问号结尾），说明还没做完，同一份改动只放过这一次，下一轮照样要卡片 |
 | 你 `git commit` | 把提交号回填到对应条目，并把它标成已定稿 |
 
 钩子出任何错都会静默跳过，不会影响你正常使用 AI。
@@ -238,12 +253,13 @@ review 卡片只出现在聊天里，报告直接渲染成网页，都不会留�
 
 ```
 .claude-plugin/marketplace.json      插件市场清单（.codebuddy-plugin/ 下有同一份）
+.agents/plugins/marketplace.json     Codex 的插件市场清单
 plugins/light-work/
-  .claude-plugin/plugin.json         插件清单（.codebuddy-plugin/ 下有同一份）
+  .claude-plugin/plugin.json         插件清单（.codebuddy-plugin/、.codex-plugin/ 下各有一份，版本号保持一致）
   hooks/hooks.json                   5 个钩子
   scripts/lw.py                      确定性核心（纯标准库）
   skills/lw-record/  lw-edit/  lw-review/     自动
-  skills/lw-check/   lw-report/  lw-branch/   手动命令
+  skills/lw-check/   lw-report/  lw-branch/   手动命令（各带 agents/openai.yaml，Codex 里也不会自动触发）
 docs/design.md                       数据格式、分级规则、钩子行为
 tests/smoke.sh                       端到端冒烟测试
 ```
@@ -257,13 +273,15 @@ codebuddy --plugin-dir ./plugins/light-work        # 加载本地插件试用
 LW_DEBUG=1 python3 plugins/light-work/scripts/lw.py hook stop < input.json   # 调试单个钩子
 ```
 
-改了技能或脚本后：跑 `tests/smoke.sh` → 升两份 `plugin.json` 的版本号 → 在 `CHANGELOG.md` 记一笔 → 执行 `plugin marketplace update`。
+改了技能或脚本后：跑 `tests/smoke.sh` → 升三份 `plugin.json` 的版本号 → 在 `CHANGELOG.md` 记一笔 → 执行 `plugin marketplace update`。
 
 ## 已知限制
 
-- 钩子按 CodeBuddy Code 和 Claude Code 的插件规范编写，冒烟测试模拟了它们的输入输出，还需要在真实会话里观察。CodeBuddy **IDE** 是否支持插件钩子需要确认
+- 钩子按 Claude Code、Codex、CodeBuddy Code 的插件规范编写，冒烟测试模拟了它们的输入输出（包括 Codex 的 `apply_patch`），还需要在真实会话里观察。CodeBuddy **IDE** 是否支持插件钩子需要确认
+- 编辑钩子只认编辑工具（Claude 的 Edit/Write、Codex 的 apply_patch）。AI 用 shell 命令（`sed -i`、`cat >`）改文件时不会被标记为"本轮有改动"，Stop 不会拦，`/lw-check` 的"未登记改动"能事后发现
+- "在问你就先不拦"只看最后一句是不是问号结尾，客套的"还有别的吗？"也会让卡片推迟到下一轮
 - 敏感词和接口变化的检测是启发式的，会有误报；阈值内置在 `scripts/lw.py` 的 `DEFAULTS` 里
-- 约束按文件和代码对上，跨文件的隐式依赖只能靠 `lw-edit` 改前查调用方，以及 `/lw-check` 的影响面分析
+- 约束按文件和代码对上。跨文件的影响只做一层：`score` 列出"改了内部逻辑的函数被哪些没改的文件按名字引用"，不追调用链、不做类型分析，同名会误报
 - 网页里的流程图要联网加载渲染脚本，没网时显示 Markdown 原文
 
 ## 路线图

@@ -1,5 +1,13 @@
 # 更新记录
 
+## light-work 0.6.0 · 2026-11-20
+
+- 支持 Codex：新增 `.codex-plugin/plugin.json` 和 `.agents/plugins/marketplace.json`；编辑钩子能解析 Codex `apply_patch` 补丁里的文件路径（之前在 Codex 下会静默失效：约束不注入、改完不拦）
+- 手动命令 `lw-check` / `lw-report` / `lw-branch` 在 Codex 里也不会自动触发（`agents/openai.yaml` 里 `allow_implicit_invocation: false`）；参数写法兼容不替换 `$ARGUMENTS` 的工具
+- 新增 `lw.py why 文件:行`：git blame → 提交 → 台账条目，带出当时的意图、约束、根因，以及后来有没有被推翻；`lw-edit` 修 bug 前会用
+- Stop 少误拦：AI 最后一句是在问用户时，同一份改动先放过一次
+- `score` 新增"一层调用方"：改了内部逻辑的函数，列出本轮没改但按名字引用它的文件，只展示不抬级别
+
 ## light-work 0.5.0 · 2026-11-20
 
 对照需求逐项审查，去掉没有对应需求的设计，补上一处缺口：

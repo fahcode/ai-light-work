@@ -7,7 +7,7 @@ argument-hint: "[C-xxx]"
 
 # /lw-report：台账改动报告
 
-范围是**台账记录的改动**，不是整个分支。整个分支用 `/lw-branch`。参数：`$ARGUMENTS`
+范围是**台账记录的改动**，不是整个分支。整个分支用 `/lw-branch`。参数：`$ARGUMENTS`（Claude Code 会替换成命令后面的文字；Codex 等工具里不替换，就取用户消息里命令名后面的内容，没有就是空）
 
 `LW = python3 ~/.light-work/lw.py`
 

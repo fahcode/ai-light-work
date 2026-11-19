@@ -7,7 +7,7 @@ argument-hint: "[pr]"
 
 # /lw-branch：整个分支汇总
 
-范围是**整个分支相对基准分支的全部改动**。只想看后期改动用 `/lw-report`。参数：`$ARGUMENTS`（`pr` = 额外输出 PR 描述）
+范围是**整个分支相对基准分支的全部改动**。只想看后期改动用 `/lw-report`。参数：`$ARGUMENTS`（Claude Code 会替换成命令后面的文字；Codex 等工具里不替换，就取用户消息里命令名后面的内容，没有就是空）（`pr` = 额外输出 PR 描述）
 
 `LW = python3 ~/.light-work/lw.py`
 

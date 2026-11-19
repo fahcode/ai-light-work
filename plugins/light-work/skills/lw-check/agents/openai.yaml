@@ -1,0 +1,3 @@
+# Codex：手动命令，只在用户输入 $lw-check 时执行，不根据对话自动触发（Claude Code 靠 SKILL.md 里的 disable-model-invocation）
+policy:
+  allow_implicit_invocation: false

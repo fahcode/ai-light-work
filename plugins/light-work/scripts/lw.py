@@ -14,6 +14,7 @@
   ask                          冲突闸门：向用户确认前调用，本轮不拦截收尾
   check [范围]                 回归核对清单（默认：台账范围）
   conflicts                    条目之间的重叠、回退、反复修改
+  why 文件:行 [...]             这一行是哪条台账改动引入的：意图、约束、根因、后来有没有被推翻
   lint / stats / backfill
   view [--title T] [--open] < report.md   把报告（stdin）渲染成可看图的网页 .light-work/<分支>.html
 范围: --since-checkpoint | --ledger | --branch | --entry C-xxx | --base REF
@@ -580,6 +581,22 @@ def analyze(root, cfg, mode="checkpoint", ref=None, nhunks=4):
         impact.append({"name": n, "kind": "删除" if n in removed else "签名变化", "refs": len(refs),
                        "files": fset[:8], "sample": refs[:3]})
 
+    # 一层调用方：签名没变、只改了内部逻辑的函数，看本轮没改的文件里谁按名字引用了它。
+    # 只做一层、只展示不抬级别：同名误报难免，交给模型在卡片里判断要不要提。
+    callers = []
+    skip = set(removed + resig) | {"for", "while", "switch", "catch", "return", "function", "constructor", "(文件级)"}
+    syms = []
+    for p in eff_files[:10]:
+        for b, c in segs:
+            for n in changed_symbols(b, c, p):
+                if n and n not in skip and len(n) >= 4 and n not in syms:
+                    syms.append(n)
+    for n in syms[:8]:
+        out = git("grep", "-l", "-w", "-I", "--untracked", n, "--", ".", ":(exclude)%s" % LEDGER_DIR, check=False, cwd=root)
+        fs = [f for f in out.splitlines() if f and f not in diff and not test_re.search(f)]
+        if fs:
+            callers.append({"name": n, "files": fs[:5], "n": len(fs)})
+
     flags = []
     for it in impact:
         if it["kind"] == "删除" and it["refs"]:
@@ -608,7 +625,7 @@ def analyze(root, cfg, mode="checkpoint", ref=None, nhunks=4):
         "eff_lines": eff_lines, "eff_files": eff_files, "test_files": test_files, "skipped": skipped,
         "modules": modules, "iface": iface[:12], "new_exports": new_exports[:12], "schema": schema, "config": config,
         "sensitive": {"strong": hi_strong, "weak": hi_weak, "medium": sorted(md_hits)},
-        "impact": impact, "touched_constraints": touched, "global_constraints": globals_, "unregistered": unregistered,
+        "impact": impact, "callers": callers, "touched_constraints": touched, "global_constraints": globals_, "unregistered": unregistered,
         "entries": entries, "hunks": top, "ledger": os.path.relpath(lp, root),
     }
 
@@ -788,6 +805,11 @@ def print_analysis(r, show_hunks=True, check_mode=False):
             if it["kind"] != "删除" and not it["refs"]:
                 continue
             print("  - %s %s → %d 处引用 %s" % (it["kind"], it["name"], it["refs"], ", ".join(it["files"]) or ""))
+    if r.get("callers"):
+        print("\n一层调用方（改了这些函数的内部逻辑；下面这些本轮没改的文件按名字引用了它们，可能有同名误报）:")
+        for c in r["callers"]:
+            more = " 等 %d 个文件" % c["n"] if c["n"] > len(c["files"]) else ""
+            print("  - %s → %s%s" % (c["name"], ", ".join(c["files"]), more))
     tc = r["touched_constraints"]
     if tc or r["global_constraints"]:
         print("\n必须核对的约束（%d 触及 + %d 全局）:" % (len(tc), len(r["global_constraints"])))
@@ -1181,7 +1203,8 @@ WORKFLOW = """[ai-light-work] 当前分支 {branch} 的变更台账：{ledger}�
   1. lw-record  先把这次意图记成 open 条目（同一意图的续改就更新原条目；推翻已有约束先问用户）
   2. lw-edit    bug 先找根因；按"手术刀"原则改代码；改动明显和台账约束冲突而用户没提时，先用一句话请用户选
   3. lw-review  定稿条目 → 按约束自检 → 输出 L0-L3 review 卡片 → checkpoint --entry
-纯问答、读代码、解释、跑命令不记账。/lw-check、/lw-report、/lw-branch 只在用户手动输入时执行。台账、状态、快照全部自动维护，不要让用户做任何设置。"""
+纯问答、读代码、解释、跑命令不记账。lw-check、lw-report、lw-branch 是手动命令，只在用户明确调用时执行（Claude Code 里是 /light-work:lw-check，Codex 里是 $lw-check），不要自己去跑。
+查 bug 想知道某行代码是哪次改动、为什么这么写：$LW why 文件:行。台账、状态、快照全部自动维护，不要让用户做任何设置。"""
 
 CHANGE_INTENT = re.compile(
     r"(改|修|bug|报错|不对|不行|有问题|不要|换成|改成|加个|加上|新增|删掉|去掉|调整|优化|重构|实现|支持|兼容|"
@@ -1244,6 +1267,83 @@ def rel_to_root(root, path):
     return None if rp.startswith("..") else rp.replace(os.sep, "/")
 
 
+# Codex 的文件编辑都走 apply_patch：tool_input 里没有 file_path，路径写在补丁文本的这几种行里
+PATCH_FILE_RE = re.compile(r"^\*\*\* (?:(?:Add|Update|Delete) File|Move to):\s*(.+?)\s*$", re.M)
+
+
+def edited_paths(root, data):
+    """这次工具调用要改哪些文件（仓库相对路径，不含台账目录）。
+    Claude Code / CodeBuddy：tool_input.file_path；Codex：tool_name=apply_patch，从补丁文本里解析。"""
+    ti = data.get("tool_input")
+    cands = []
+    if isinstance(ti, dict):
+        cands = [ti[k] for k in ("file_path", "notebook_path", "path") if isinstance(ti.get(k), str) and ti[k]]
+    if not cands:  # 补丁字段名各家不一样（patch / input / command），所有字符串都扫一遍最稳
+        texts = []
+
+        def walk(v):
+            if isinstance(v, str):
+                texts.append(v)
+            elif isinstance(v, dict):
+                for x in v.values():
+                    walk(x)
+            elif isinstance(v, list):
+                for x in v:
+                    walk(x)
+        walk(ti)
+        for t in texts:
+            cands += PATCH_FILE_RE.findall(t)
+    base = data.get("cwd") or os.getcwd()
+    out = []
+    for p in cands:
+        f = rel_to_root(root, p if os.path.isabs(p) else os.path.join(base, p))
+        if f and not f.startswith(LEDGER_DIR + "/") and f not in out:
+            out.append(f)
+    return out
+
+
+def last_assistant_text(data):
+    """AI 这一轮最后说的话。Codex 直接给 last_assistant_message；Claude Code 从会话记录（JSONL）末尾找。"""
+    t = data.get("last_assistant_message")
+    if isinstance(t, str) and t.strip():
+        return t
+    tp = data.get("transcript_path")
+    if not tp or not os.path.exists(tp):
+        return ""
+    try:
+        with open(tp, "rb") as fh:
+            fh.seek(0, 2)
+            fh.seek(max(0, fh.tell() - 300000))
+            lines = fh.read().decode("utf-8", "replace").splitlines()
+    except Exception:
+        return ""
+    for ln in reversed(lines):
+        try:
+            o = json.loads(ln)
+        except Exception:
+            continue
+        if not isinstance(o, dict) or o.get("type") != "assistant":
+            continue
+        c = (o.get("message") or {}).get("content")
+        if isinstance(c, str):
+            txt = c
+        elif isinstance(c, list):
+            txt = "\n".join(x.get("text", "") for x in c if isinstance(x, dict) and x.get("type") == "text")
+        else:
+            txt = ""
+        if txt.strip():
+            return txt
+    return ""
+
+
+ASK_TAIL_RE = re.compile(r"[?？][\s*_`)）」』\"']*$")
+
+
+def looks_waiting(text):
+    """最后一句是在问用户（以问号结尾）：AI 还没做完，在等回答。"""
+    return bool(text) and bool(ASK_TAIL_RE.search(text.strip()[-300:]))
+
+
 def hook_session_start(data):
     install_shim()
     ctx = ledger_branch_ctx()
@@ -1287,9 +1387,8 @@ def hook_pre_edit(data):
     if not ctx:
         return
     root, cfg, lp = ctx
-    ti = data.get("tool_input") or {}
-    f = rel_to_root(root, ti.get("file_path") or ti.get("notebook_path") or ti.get("path"))
-    if not f or f.startswith(LEDGER_DIR + "/"):
+    files = edited_paths(root, data)
+    if not files:
         return
     st = state_load(root)
     entries, _ = parse_ledger(lp)
@@ -1298,16 +1397,19 @@ def hook_pre_edit(data):
     shown = st.get("ctx_shown")
     if not isinstance(shown, dict):
         shown = {}
-    rel = [c for c in act if not c["global"] and path_match(f, c["files"])]
     glb = [c for c in act if c["global"]]
-    new_rel = [c for c in rel if c["id"] not in shown.get(f, [])]
     new_glb = [c for c in glb if c["id"] not in shown.get("*", [])]
-    if new_rel or new_glb:
-        msgs.append("改 %s 前必须保持的约束：" % f)
-        msgs += ["- %s%s %s" % (c["id"], "[全局]" if c["global"] else "", c["text"]) for c in (new_glb + new_rel)[:12]]
-        msgs.append("这次改动如果会让其中某条明确不成立、而用户没提到，先按 lw-edit 的格式问一句再改。")
+    for f in files:  # Codex 一个补丁可能同时改好几个文件
+        rel = [c for c in act if not c["global"] and path_match(f, c["files"])]
+        new_rel = [c for c in rel if c["id"] not in shown.get(f, [])]
+        if new_rel or new_glb:
+            msgs.append("改 %s 前必须保持的约束：" % f)
+            msgs += ["- %s%s %s" % (c["id"], "[全局]" if c["global"] else "", c["text"]) for c in (new_glb + new_rel)[:12]]
+            new_glb = []
         shown[f] = sorted(set(shown.get(f, [])) | {c["id"] for c in rel})
-        shown["*"] = sorted(set(shown.get("*", [])) | {c["id"] for c in glb})
+    if msgs:
+        msgs.append("这次改动如果会让其中某条明确不成立、而用户没提到，先按 lw-edit 的格式问一句再改。")
+    shown["*"] = sorted(set(shown.get("*", [])) | {c["id"] for c in glb})
     st["ctx_shown"] = shown
     if not [e for e in entries if e["status"] == "open" and e["type"] != "baseline"]:
         msgs.append("还没有 open 条目：先按 lw-record 记下这次修改的意图，再改代码。")
@@ -1321,14 +1423,14 @@ def hook_post_edit(data):
     if not ctx:
         return
     root = ctx[0]
-    ti = data.get("tool_input") or {}
-    f = rel_to_root(root, ti.get("file_path") or ti.get("notebook_path") or ti.get("path"))
-    if not f or f.startswith(LEDGER_DIR + "/"):
+    files = edited_paths(root, data)
+    if not files:
         return
     st = state_load(root)
     st["dirty"] = True
-    if f not in st.setdefault("edited", []):
-        st["edited"].append(f)
+    for f in files:
+        if f not in st.setdefault("edited", []):
+            st["edited"].append(f)
     state_save(root, st)
 
 
@@ -1347,6 +1449,11 @@ def hook_stop(data):
     if git("rev-parse", base + "^{tree}").strip() == cur:
         state_clear(root)
         return
+    if st.get("defer_tree") != cur and looks_waiting(last_assistant_text(data)):
+        # AI 最后一句在问用户：还没做完，这次先不拦。同一份改动只放过一次，改动状态保留，下一轮照样会要卡片
+        st["defer_tree"] = cur
+        state_save(root, st)
+        return
     if st.get("nag_tree") == cur and st.get("nags", 0) >= 2:
         return  # 同一份改动已经提醒过两次，不再拦
     st["nags"] = st.get("nags", 0) + 1 if st.get("nag_tree") == cur else 1
@@ -1358,6 +1465,75 @@ def hook_stop(data):
               "如果这些改动确实不需要记账（临时调试且已还原），运行 `python3 ~/.light-work/lw.py checkpoint` 跳过。"
               % (len(files), ", ".join(files[:5])))
     print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
+
+
+def cmd_why(a):
+    """文件:行 → git blame → 提交号 → 台账条目。未提交的行按文件归到 open 条目。"""
+    root = repo_root()
+    entries, _ = parse_ledger(ledger_path(root))
+    entries = [e for e in entries if e["status"] != "dropped"]
+    _, dead = active_constraints(entries)
+    later = {}
+    for e in entries:
+        for s_ in e["supersedes"]:
+            later.setdefault(s_.split(".")[0], []).append(e["id"])
+    cfg = load_cfg(root)
+    mb = merge_base(detect_base(cfg))
+    sr = start_ref()
+    start_ct = int(git("log", "-1", "--format=%ct", sr, check=False).strip() or 0) if git_ok("rev-parse", "--verify", "-q", sr) else 0
+
+    def show(e, path):
+        print("  %s · %s · %s · %s" % (e["id"], e["type"], e["status"], e["title"]))
+        f = e["fields"]
+        for k in ("意图", "根因"):
+            if f.get(k) and f[k] not in ("待查", "-", "无"):
+                print("    %s: %s" % (k, f[k]))
+        for c in e["constraints"]:
+            print("    %s %s%s" % (c["id"], c["text"], "（已作废）" if c["id"] in dead else ""))
+        if later.get(e["id"]):
+            print("    后来被推翻/改写: %s" % ", ".join(later[e["id"]]))
+
+    for spec in a.targets:
+        m = re.match(r"^(.+?):(\d+)(?:-(\d+))?$", spec)
+        if not m:
+            die("格式：文件:行号 或 文件:起-止，例如 src/a.ts:42")
+        path = rel_to_root(root, m.group(1)) or m.group(1)
+        lo, hi = int(m.group(2)), int(m.group(3) or m.group(2))
+        raw = git("blame", "--porcelain", "-L", "%d,%d" % (lo, hi), "--", path, check=False, cwd=root)
+        shas = []
+        for ln in raw.splitlines():
+            mm = re.match(r"^([0-9a-f]{40}) \d+ \d+", ln)
+            if mm and mm.group(1) not in shas:
+                shas.append(mm.group(1))
+        if not shas:
+            print("%s: git blame 没有结果（文件不存在或行号超出范围）" % spec)
+            continue
+        by_file = [e for e in entries if e["type"] != "baseline" and path_match(path, e["files"])]
+        for sha in shas:
+            if set(sha) == {"0"}:
+                print("%s ← 还没提交的改动" % spec)
+                hits = [e for e in by_file if e["status"] == "open"] or by_file[-1:]
+                for e in hits:
+                    show(e, path)
+                if not hits:
+                    print("  台账里没有条目登记过这个文件（可能是没走台账的改动）")
+                continue
+            info = git("log", "-1", "--date=short", "--format=%h %ad %s", sha, check=False, cwd=root).strip()
+            print("%s ← %s" % (spec, info))
+            hits = [e for e in entries if any(sha.startswith(x) for x in e["shas"])]
+            narrowed = [e for e in hits if path_match(path, e["files"])]
+            if narrowed or hits:
+                for e in (narrowed or hits):
+                    show(e, path)
+                continue
+            if mb and git_ok("merge-base", "--is-ancestor", sha, mb):
+                print("  基准分支上就有的代码，不是这个分支改的")
+            elif start_ct and int(git("log", "-1", "--format=%ct", sha, check=False).strip() or 0) <= start_ct:
+                print("  台账起点之前的提交（最初的功能开发），台账里没有逐条记录")
+            else:
+                print("  这个提交没有对应的台账条目（可能是没走台账的改动）")
+                for e in by_file[-3:]:
+                    print("  同文件的条目: %s %s" % (e["id"], e["title"]))
 
 
 def cmd_ask(a):
@@ -1480,6 +1656,8 @@ def main():
     p = sp.add_parser("conflicts"); p.add_argument("--json", action="store_true"); p.set_defaults(fn=cmd_conflicts)
     sp.add_parser("lint").set_defaults(fn=cmd_lint)
     sp.add_parser("ask", help="冲突闸门提问前调用").set_defaults(fn=cmd_ask)
+    p = sp.add_parser("why", help="这一行是哪条台账改动引入的"); p.add_argument("targets", nargs="+", metavar="文件:行")
+    p.set_defaults(fn=cmd_why)
     p = sp.add_parser("backfill"); p.add_argument("--commit", default="HEAD"); p.set_defaults(fn=cmd_backfill)
     sp.add_parser("stats").set_defaults(fn=cmd_stats)
     p = sp.add_parser("view"); p.add_argument("--open", action="store_true")
