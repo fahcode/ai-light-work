@@ -1,5 +1,14 @@
 # 更新记录
 
+## light-work 0.6.1 · 2026-11-20
+
+修复：
+- 路径里有符号链接时（macOS 的 `/tmp`、`/var`，或通过链接打开项目），编辑钩子整个失效：约束不注入、改完不拦。现在两边都先取真实路径
+- 删除整个文件时 diff 内容丢失，删除导出、引用检查、关键片段都看不见
+- 只改锁文件（如 `pnpm-lock.yaml`）被判成 L2"改了配置"。配置和 schema 只看有效文件
+- 钩子出错不再完全静默：记下来，下次会话开始或用户发消息时让 AI 告诉用户一次
+- `~/.light-work/lw.py` 改成原子替换，Claude 和 Codex 里装了不同版本时不会读到半个文件
+
 ## light-work 0.6.0 · 2026-11-20
 
 - 支持 Codex：新增 `.codex-plugin/plugin.json` 和 `.agents/plugins/marketplace.json`；编辑钩子能解析 Codex `apply_patch` 补丁里的文件路径（之前在 Codex 下会静默失效：约束不注入、改完不拦）

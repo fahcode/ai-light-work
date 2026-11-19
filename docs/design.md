@@ -116,7 +116,7 @@
 
 Codex 和 Claude Code 的钩子协议基本一致（事件名、matcher、`additionalContext`、`decision: block`、`stop_hook_active`），插件钩子里 `CLAUDE_PLUGIN_ROOT` 在 Codex 下也有，所以三家共用一份 `hooks/hooks.json`。差别只有两处：Codex 编辑文件统一走 `apply_patch`；Codex 的钩子要用户在 `/hooks` 里信任后才运行。
 
-钩子出任何异常都只写 stderr、以 0 退出，不会把会话弄坏。设 `LW_DEBUG=1` 可以看到完整报错。
+钩子出任何异常都写 stderr、以 0 退出，不会把会话弄坏；同时记到 `~/.light-work/hook-error.txt`（脚本复制失败、post-commit 安装失败也记），下一次 SessionStart 或 UserPromptSubmit 把它注入给 AI，让 AI 告诉用户一次，然后删掉。路径一律先取 `realpath` 再算仓库相对路径（macOS 的 `/tmp`、`/var` 是符号链接）。设 `LW_DEBUG=1` 可以看到完整报错。
 
 状态文件：`.git/light-work/state-<slug>.json`（脚本自己维护，用户不用管）。
 

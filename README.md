@@ -4,7 +4,7 @@
 
 | 插件 | 版本 | 一句话 |
 |---|---|---|
-| [light-work](plugins/light-work) | 0.6.0 | 按分支自动维护变更台账：AI 改代码时自动记下你要什么，像靠谱的同事一样做最小改动，改完按复杂度给你看 review 卡片；需要时手动做冲突检查和可视化报告 |
+| [light-work](plugins/light-work) | 0.6.1 | 按分支自动维护变更台账：AI 改代码时自动记下你要什么，像靠谱的同事一样做最小改动，改完按复杂度给你看 review 卡片；需要时手动做冲突检查和可视化报告 |
 
 支持 **Claude Code**、**Codex** 和 **CodeBuddy Code / WorkBuddy**，共用同一份插件（同一套技能、钩子和脚本）。只依赖 Python 3.8+ 和 git。
 
@@ -68,23 +68,68 @@
 
 ## 安装
 
-```bash
-codebuddy plugin marketplace add /Users/hfh/learn/ai-light-work   # 或推送后用 fahcode/ai-light-work
-codebuddy plugin install light-work@ai-light-work
+三个工具都从 GitHub 仓库 `fahcode/ai-light-work` 安装，用的是同一份插件。前提：本机有 `git` 和 `python3`（钩子用 `python3` 调脚本）。仓库如果是私有的，本机的 git 要能拉取它（`git clone git@github.com:fahcode/ai-light-work.git` 能成功）。
+
+### Claude Code
+
+在 Claude Code 里依次输入：
+
+```
+/plugin marketplace add fahcode/ai-light-work
+/plugin install light-work@ai-light-work
+/reload-plugins
 ```
 
-Claude Code 把 `codebuddy` 换成 `claude` 即可。只想在当前会话试用：`codebuddy --plugin-dir /Users/hfh/learn/ai-light-work/plugins/light-work`。
+第一条把这个仓库加成插件市场（市场名是 `ai-light-work`），第二条从里面安装 `light-work`，第三条让当前会话加载它（也可以直接重开 Claude Code）。
 
-**Codex：**
+不想进会话的话，在终端里执行等价的命令：
 
 ```bash
-codex plugin marketplace add /Users/hfh/learn/ai-light-work   # 或 fahcode/ai-light-work
-codex plugin add light-work@ai-light-work                     # 或在 Codex 里输入 /plugins 安装
+claude plugin marketplace add fahcode/ai-light-work
+claude plugin install light-work@ai-light-work
 ```
+
+装好后检查一下：
+- 输入 `/plugin`，能看到 `light-work` 已启用
+- 输入 `/lw`，补全里有 `/light-work:lw-check`、`/light-work:lw-report`、`/light-work:lw-branch`
+- 在任意需求分支上开一个新会话，仓库里会自动出现 `.light-work/<分支>.md`
+
+Claude Code 的插件钩子装好就会运行，不需要额外确认。
+
+更新到最新版：
+
+```
+/plugin marketplace update ai-light-work
+```
+
+然后重开 Claude Code。
+
+### Codex
+
+```bash
+codex plugin marketplace add fahcode/ai-light-work
+```
+
+然后打开 Codex，输入 `/plugins`，在 `ai-light-work` 市场里安装 `light-work`。
 
 装完开一个新会话，**输入 `/hooks`，把 light-work 的 5 个钩子设为信任**。Codex 不会运行没被信任的钩子；以后 `hooks/hooks.json` 有改动，也要重新信任一次。不信任的话技能还能用，但自动记录、改前注入约束、改完必出卡片都不会生效。
 
-为什么不直接装到通用的 `~/.agents/skills/`：那里只能放技能，放不了钩子，而这个插件靠钩子保证流程不漏；Claude Code 目前也不读这个目录。
+手动命令在 Codex 里用 `$lw-check`、`$lw-report`、`$lw-branch` 调用（或输入 `/skills` 选）。
+
+更新到最新版：`codex plugin marketplace upgrade ai-light-work`，然后开新会话；如果 `/hooks` 提示钩子有变化，重新信任一次。
+
+### CodeBuddy Code / WorkBuddy
+
+和 Claude Code 一样，把命令里的 `claude` 换成 `codebuddy`：
+
+```bash
+codebuddy plugin marketplace add fahcode/ai-light-work
+codebuddy plugin install light-work@ai-light-work
+```
+
+### 为什么不直接装到通用的 `~/.agents/skills/`
+
+那里只能放技能，放不了钩子，而这个插件靠钩子保证流程不漏；Claude Code 目前也不读这个目录。
 
 **装好就完了。** 在哪个分支上开发就记哪个分支的台账；切到别的分支，自动换成那个分支自己的；切回来，还是原来那份。
 
@@ -165,7 +210,7 @@ flowchart LR
 | AI 准备结束回复 | 改了代码却还没出卡片，就拦下来要求先收尾（同一份改动最多拦两次）。不拦的情况：AI 正在等你回答冲突确认；AI 最后一句是在问你（以问号结尾），说明还没做完，同一份改动只放过这一次，下一轮照样要卡片 |
 | 你 `git commit` | 把提交号回填到对应条目，并把它标成已定稿 |
 
-钩子出任何错都会静默跳过，不会影响你正常使用 AI。
+钩子出错不会打断你正常使用 AI，但也不会一直默默失效：错误会记下来，在下一次会话开始或你发消息时，由 AI 用一句话告诉你一次。
 
 ---
 
@@ -269,11 +314,11 @@ tests/smoke.sh                       端到端冒烟测试
 ```bash
 bash tests/smoke.sh                                # 在临时仓库里模拟钩子和技能的完整流程
 claude plugin validate ./plugins/light-work        # 校验插件结构
-codebuddy --plugin-dir ./plugins/light-work        # 加载本地插件试用
+claude --plugin-dir ./plugins/light-work           # 不安装，直接加载本地插件试用（codebuddy 同理）
 LW_DEBUG=1 python3 plugins/light-work/scripts/lw.py hook stop < input.json   # 调试单个钩子
 ```
 
-改了技能或脚本后：跑 `tests/smoke.sh` → 升三份 `plugin.json` 的版本号 → 在 `CHANGELOG.md` 记一笔 → 执行 `plugin marketplace update`。
+改了技能或脚本后：跑 `tests/smoke.sh` → 升三份 `plugin.json` 的版本号 → 在 `CHANGELOG.md` 记一笔 → 推送到 GitHub → 按「安装」里的方法在各工具里更新。
 
 ## 已知限制
 
@@ -282,6 +327,7 @@ LW_DEBUG=1 python3 plugins/light-work/scripts/lw.py hook stop < input.json   # �
 - "在问你就先不拦"只看最后一句是不是问号结尾，客套的"还有别的吗？"也会让卡片推迟到下一轮
 - 敏感词和接口变化的检测是启发式的，会有误报；阈值内置在 `scripts/lw.py` 的 `DEFAULTS` 里
 - 约束按文件和代码对上。跨文件的影响只做一层：`score` 列出"改了内部逻辑的函数被哪些没改的文件按名字引用"，不追调用链、不做类型分析，同名会误报
+- 收尾后如果 merge、rebase 或拉了别人的提交，下一次 `score` 会把这些改动也算进"本轮"，级别可能偏高（不会因此误拦：只有 AI 编辑过文件时 Stop 才会拦）
 - 网页里的流程图要联网加载渲染脚本，没网时显示 Markdown 原文
 
 ## 路线图

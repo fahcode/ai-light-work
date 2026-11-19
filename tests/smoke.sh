@@ -52,6 +52,9 @@ expect "识别改代码意图" "$out" "先 lw-record"
 EDIT="{\"cwd\":\"$REPO\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$REPO/src/search/voice.ts\"}}"
 out=$(hook pre-edit "$EDIT")
 expect "没有 open 条目时提醒" "$out" "还没有 open 条目"
+ln -s "$REPO" "$TMP/link"   # macOS 的 /tmp、/var 本身就是符号链接；项目也可能通过链接打开
+out=$(hook pre-edit "{\"cwd\":\"$TMP/link\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$TMP/link/src/search/voice.ts\"}}")
+expect "通过符号链接路径编辑也能识别" "$out" "还没有 open 条目"
 
 echo "技能：lw-record 写条目"
 cat >> .light-work/feature-voice.md <<'EOF'
@@ -216,5 +219,27 @@ out=$(hook stop "{\"cwd\":\"$REPO\",\"last_assistant_message\":\"改好了，卡
 expect "最后不是提问就照常拦" "$out" '"decision": "block"'
 out=$($L why src/ui/page.ts:3); expect "why：未提交的行归到 open 条目" "$out" "还没提交的改动"
 expect "why：未提交的行找到条目" "$out" "C-001 · change · open"
+
+echo "边界：删除整个文件 / 只改锁文件 / 出错告诉一次"
+git add -A && git commit -qm codex
+git checkout -qb feature/edge
+hook session-start "{\"cwd\":\"$REPO\"}" >/dev/null
+echo "lockfileVersion: 9" > pnpm-lock.yaml
+out=$($L score); expect "只改锁文件是 L0" "$out" "级别: L0"
+grep -qF "改了配置" <<<"$out" && fail "锁文件被当成配置" "$out" || ok "锁文件不算配置"
+rm -f pnpm-lock.yaml
+git rm -q src/search/voice.ts
+out=$($L score); expect "删除整个文件：识别删除导出" "$out" "删除 src/search/voice.ts"
+expect "删除整个文件：还有人引用" "$out" "删除了 handleResult"
+expect "删除整个文件：片段用旧行号" "$out" "src/search/voice.ts:1-"
+git checkout -q HEAD -- src/search/voice.ts
+python3 - "$SCRIPT" <<'EOF'
+import sys, importlib.util
+spec = importlib.util.spec_from_file_location("lw", sys.argv[1]); lw = importlib.util.module_from_spec(spec); spec.loader.exec_module(lw)
+lw.note_error("钩子 stop", RuntimeError("boom"))
+EOF
+out=$(hook prompt "{\"cwd\":\"$REPO\",\"prompt\":\"看看这个函数\"}"); expect "钩子出错后下一条消息告诉 AI" "$out" "上次运行出错（"
+expect "带上出错的位置" "$out" "钩子 stop: boom"
+out=$(hook prompt "{\"cwd\":\"$REPO\",\"prompt\":\"看看这个函数\"}"); grep -qF "上次运行出错" <<<"$out" && fail "错误重复提示" "$out" || ok "错误只告诉一次"
 
 echo; echo "全部通过（$pass 项）"

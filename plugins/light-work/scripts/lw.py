@@ -421,7 +421,8 @@ def parse_diff(base, cur):
             continue
         if ln.startswith("+++ "):
             p = ln[4:]
-            curf = p[2:] if p.startswith("b/") else None
+            if p.startswith("b/"):  # 删除文件时这里是 /dev/null，沿用 --- a/x 的文件名
+                curf = p[2:]
             continue
         if ln.startswith("--- "):
             p = ln[4:]
@@ -430,7 +431,9 @@ def parse_diff(base, cur):
             continue
         m = re.match(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$", ln)
         if m and curf in files:
-            hunk = {"start": int(m.group(3)), "len": int(m.group(4) or 1), "ctx": m.group(5).strip(),
+            new_len = int(m.group(4) or 1)
+            start, ln_ = (int(m.group(3)), new_len) if new_len else (int(m.group(1)), int(m.group(2) or 1))  # 纯删除用旧行号
+            hunk = {"start": start, "len": ln_, "ctx": m.group(5).strip(),
                     "body": [], "changed": 0}
             files[curf]["hunks"].append(hunk)
             continue
@@ -464,8 +467,8 @@ def analyze(root, cfg, mode="checkpoint", ref=None, nhunks=4):
     eff_lines = sum(diff[p]["add"] + diff[p]["del"] for p in eff_files)
     eff_del = sum(diff[p]["del"] for p in eff_files)
     modules = sorted(set(module_key(p, cfg["module_depth"]) for p in eff_files))
-    schema = [p for p in diff if glob_hit(p, cfg["schema"])]
-    config = [p for p in eff_files + skipped if glob_hit(p, cfg["config"])]
+    schema = [p for p in eff_files if glob_hit(p, cfg["schema"])]
+    config = [p for p in eff_files if glob_hit(p, cfg["config"])]
 
     # 导出/签名：只有"删掉导出"或"签名变了"才算接口变化；常量改值、新增导出不算
     NAME_RE = re.compile(r"(?:function|class|interface|type|enum|const|let|var|def|func|fun|message|service|rpc)"
@@ -693,8 +696,8 @@ def init_ledger(root, cfg, quiet=False, hook=True):
             import contextlib, io
             with contextlib.redirect_stdout(io.StringIO()):
                 install_hook(root)
-        except Exception:
-            pass
+        except Exception as e:
+            note_error("安装 post-commit 钩子", e)
     base = detect_base()
     lp = ledger_path(root, br)
     created = False
@@ -1211,8 +1214,36 @@ CHANGE_INTENT = re.compile(
     r"\bfix|\bchange|refactor|\badd\b|remove|update|implement)", re.I)
 
 
+ERR_FILE = os.path.expanduser("~/.light-work/hook-error.txt")
+PENDING_ERR = []   # 本次钩子要顺带告诉 AI 的上次错误
+EMITTED = []
+
+
+def note_error(where, e):
+    """钩子不能把会话弄坏，但也不能一直默默失效：记下来，下次有机会时告诉用户一次。"""
+    try:
+        os.makedirs(os.path.dirname(ERR_FILE), exist_ok=True)
+        with open(ERR_FILE, "w", encoding="utf-8") as f:
+            f.write("%s %s: %s" % (_dt.datetime.now().strftime("%m-%d %H:%M"), where, e))
+    except Exception:
+        pass
+
+
+def take_error():
+    try:
+        msg = open(ERR_FILE, encoding="utf-8").read().strip()
+        os.remove(ERR_FILE)
+    except Exception:
+        return None
+    return ("[ai-light-work] 插件上次运行出错（%s），台账可能没有正常记录。"
+            "请在这一轮回复的开头用一句话告诉用户，并建议在 GitHub fahcode/ai-light-work 反馈。" % msg) if msg else None
+
+
 def emit(event, text=None, extra=None):
     out = dict(extra or {})
+    if PENDING_ERR:
+        text = "\n".join([PENDING_ERR.pop()] + ([text] if text else []))
+    EMITTED.append(event)
     if text:
         out["hookSpecificOutput"] = {"hookEventName": event, "additionalContext": text}
     if out:
@@ -1228,10 +1259,12 @@ def install_shim():
             return
         if not os.path.exists(dst) or open(dst, "rb").read() != open(me, "rb").read():
             os.makedirs(os.path.dirname(dst), exist_ok=True)
-            shutil.copyfile(me, dst)
-            os.chmod(dst, 0o755)
-    except Exception:
-        pass
+            tmp = "%s.%d.tmp" % (dst, os.getpid())
+            shutil.copyfile(me, tmp)
+            os.chmod(tmp, 0o755)
+            os.replace(tmp, dst)  # 原子替换：另一个会话（或另一个工具里的版本）同时在读也不会读到半个文件
+    except Exception as e:
+        note_error("复制 ~/.light-work/lw.py", e)
 
 
 def ledger_branch_ctx():
@@ -1259,9 +1292,9 @@ def capture(fn, *args):
 def rel_to_root(root, path):
     if not path:
         return None
-    ap = os.path.abspath(path)
+    ap = os.path.realpath(path)  # git 给的 root 已解析符号链接，工具给的路径可能没解析
     try:
-        rp = os.path.relpath(ap, root)
+        rp = os.path.relpath(ap, os.path.realpath(root))
     except ValueError:
         return None
     return None if rp.startswith("..") else rp.replace(os.sep, "/")
@@ -1551,6 +1584,11 @@ def cmd_hook(a):
         data = json.loads(raw) if raw.strip() else {}
     except Exception:
         data = {}
+    ev = {"session-start": "SessionStart", "prompt": "UserPromptSubmit"}.get(a.event)
+    if ev:  # 只有这两个事件能把话带给 AI
+        err = take_error()
+        if err:
+            PENDING_ERR.append(err)
     try:
         if data.get("cwd") and os.path.isdir(data["cwd"]):
             os.chdir(data["cwd"])
@@ -1558,10 +1596,13 @@ def cmd_hook(a):
          "post-edit": hook_post_edit, "stop": hook_stop}[a.event](data)
     except SystemExit:
         pass
-    except Exception as e:  # 钩子永远不能把会话弄坏
+    except Exception as e:  # 钩子永远不能把会话弄坏：不报错退出，记下来下次告诉用户
         if os.environ.get("LW_DEBUG"):
             raise
         sys.stderr.write("ai-light-work hook %s: %s\n" % (a.event, e))
+        note_error("钩子 " + a.event, e)
+    if PENDING_ERR and not EMITTED:
+        emit(ev)
     sys.exit(0)
 
 
