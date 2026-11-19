@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+.DS_Store
+# 在本仓库里自测插件时产生的台账
+.light-work/

@@ -1,0 +1,14 @@
+{
+  "name": "ai-light-work",
+  "owner": {
+    "name": "fahcode"
+  },
+  "description": "让日常 AI 编码更轻、更稳的插件集合",
+  "plugins": [
+    {
+      "name": "light-work",
+      "source": "./plugins/light-work",
+      "description": "按分支自动维护的变更台账 + 手术刀式修改 + L0-L3 review 卡片 + 冲突检查与可视化报告"
+    }
+  ]
+}
