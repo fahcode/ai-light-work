@@ -4,7 +4,7 @@
 
 | 插件 | 版本 | 一句话 |
 |---|---|---|
-| [light-work](plugins/light-work) | 0.6.2 | 按分支自动维护变更台账：AI 改代码时自动记下你要什么，像靠谱的同事一样做最小改动，改完按复杂度给你看 review 卡片；需要时手动做冲突检查和可视化报告 |
+| [light-work](plugins/light-work) | 0.6.3 | 按分支自动维护变更台账：AI 改代码时自动记下你要什么，像靠谱的同事一样做最小改动，改完按复杂度给你看 review 卡片；需要时手动做冲突检查和可视化报告 |
 
 支持 **Claude Code**、**Codex** 和 **CodeBuddy Code / WorkBuddy**，共用同一份插件（同一套技能、钩子和脚本）。只依赖 Python 3.8+ 和 git。
 
@@ -37,8 +37,8 @@
 | 和以前定下的事冲突时让我确认，但要轻 | 只在明确冲突时问一句，回个数字就行 | ✓ |
 | 每次改完都有适合人看的 review，复杂的给图和关键代码 | `lw-review` 按 L0~L3 输出；L2、L3 同时生成网页 | ✓ |
 | 检查时不用我描述查什么 | `/lw-check`：检查清单来自台账，并且能算出条目之间的回退和热点 | ✓ |
-| 台账改动的报告：流程图、阅读顺序、风险、测试回归清单 | `/lw-report`（`/lw-report C-xxx` 只看一条） | ✓ |
-| 整个分支的汇总 | `/lw-branch`（`/lw-branch pr` 额外给 PR 描述） | ✓ |
+| 审阅最近一次或指定条目的改动 | 手动调用 `/lw-review`，可带条目编号 | ✓ |
+| 合入前审阅整个分支 | `/lw-review branch` 生成分支合入报告 | ✓ |
 | 不用我管文件、状态、配置 | 零配置；每个分支只有 `.light-work/<分支>.md` 一个文件；提交后条目自动定稿 | ✓ |
 | 在 CodeBuddy 里能用 | 插件格式兼容 CodeBuddy Code / WorkBuddy | ⚠ 钩子还没在真实会话里验证 |
 
@@ -56,7 +56,7 @@
 ## 边界：它不做什么
 
 - **不负责从零开发新功能**：适用于功能做完之后的变更和修复阶段，新功能用你已有的工具做
-- **不替原始功能凭空写约束**：约束只来自你实际提出的修改。最初做好的功能不会被 AI 推断成一堆约束（推断出来的约束不准，反而会带来误报和多余的提问）；它的安全靠 `lw-edit` 的改前查调用方，以及 `/lw-check 全分支`、`/lw-branch` 的检查
+- **不替原始功能凭空写约束**：约束只来自你实际提出的修改。最初做好的功能不会被 AI 推断成一堆约束（推断出来的约束不准，反而会带来误报和多余的提问）；它的安全靠 `lw-edit` 的改前查调用方，以及 `/lw-check branch` 和 `/lw-review branch`
 - **不替代测试和人工 review**：它帮你把要看的东西缩小、排好序，并且如实标出哪些没验证；最终判断还是你的
 - **不保存完整对话**：台账只存蒸馏后的意图、约束和结论。要追溯原话，去 IDE 的会话记录里找
 - **不是团队共享工具**：台账只在你本地（自动加进 `.git/info/exclude`），不会提交，也不会出现在 PR 里
@@ -91,7 +91,7 @@ claude plugin install light-work@ai-light-work
 
 装好后检查一下：
 - 输入 `/plugin`，能看到 `light-work` 已启用
-- 输入 `/lw`，补全里有 `/light-work:lw-check`、`/light-work:lw-report`、`/light-work:lw-branch`
+- 输入 `/lw`，补全里有 `/light-work:lw-check`、`/light-work:lw-review`
 - 在 Git 工作区开一个新会话，仓库里会自动出现当前分支的台账 `.light-work/<分支>.md`
 
 Claude Code 的插件钩子装好就会运行，不需要额外确认。
@@ -114,7 +114,7 @@ codex plugin marketplace add fahcode/ai-light-work
 
 装完开一个新会话，**输入 `/hooks`，把 light-work 的 5 个钩子设为信任**。Codex 不会运行没被信任的钩子；以后 `hooks/hooks.json` 有改动，也要重新信任一次。不信任的话技能还能用，但自动记录、改前注入约束、未收尾提醒都不会生效。
 
-手动命令在 Codex 里用 `$lw-check`、`$lw-report`、`$lw-branch` 调用（或输入 `/skills` 选）。
+手动命令在 Codex 里用 `$lw-check`、`$lw-review` 调用（或输入 `/skills` 选）。
 
 更新到最新版：`codex plugin marketplace upgrade ai-light-work`，然后开新会话；如果 `/hooks` 提示钩子有变化，重新信任一次。
 
@@ -147,7 +147,7 @@ flowchart LR
     R --> E --> C
   end
   C --> V["聊天里的卡片<br/>+ 可看图的网页"]
-  M["你手动输入<br/>/lw-check · /lw-report · /lw-branch"] -.-> L[("当前分支的台账")]
+  M["你手动输入<br/>/lw-check · /lw-review"] -.-> L[("当前分支的台账")]
   R & C --> L
 ```
 
@@ -186,17 +186,25 @@ flowchart LR
 
 代码片段只取自真实 diff，图只画真实存在的函数。
 
-### 手动的三个命令
+### 两条手动命令
 
-| 命令 | 看什么 | 给你什么 |
-|---|---|---|
-| `/lw-check` | 台账记录的所有改动。参数：`C-xxx` 只看一条，`增量` 只看最近一次，`全分支` 包括最初的功能开发 | 一屏清单：哪次改动改掉了前面的（回退）、哪个函数被多个条目反复改（热点）、哪些约束互相矛盾、哪些没验证、哪些文件改了却不属于任何条目。最后问你要不要修 |
-| `/lw-report` | **只看台账改动**（功能完成之后的变更和修复）；`/lw-report C-xxx` 只看这一条，并且展开得更详细 | 改动时间线、改动点流程图、阅读顺序、风险、待拍板、**给测试的回归清单** → `.light-work/<分支>.html` |
-| `/lw-branch` | **整个分支**：功能开发 + 后续所有改动 | 整体流程图、阅读顺序、文件清单、风险、**回归清单** → `.light-work/<分支>.html`；`/lw-branch pr` 额外输出可以直接粘贴的 PR 描述 |
+| 命令 | 用途 |
+|---|---|
+| `/lw-review` | 审阅改了什么、为什么改、影响哪里。选择 `branch` 时生成合入报告 |
+| `/lw-check` | 核对行为回归、约束冲突和验证缺口，给出问题及证据 |
 
-调用方式：Claude Code 里是 `/light-work:lw-check`（输入 `/lw` 后从补全里选），Codex 里是 `$lw-check`（或用 `/skills` 选）。
+两条命令使用同一套参数。
 
-**这三个只能你手动调用，AI 不会自己触发**：Claude Code 靠 `disable-model-invocation`，Codex 靠技能里的 `agents/openai.yaml`（`allow_implicit_invocation: false`）。会自动执行的只有 `lw-record`、`lw-edit`、`lw-review` 这三步。
+| 参数 | 范围 |
+|---|---|
+| 无 | 最近一条台账改动 |
+| `C-xxx` | 指定条目已保存的各轮改动 |
+| `all` 或 `a` | 全部台账条目的已收尾改动 |
+| `branch` 或 `b` | 相对基准分支的全部改动，包括最初开发、后续修改和工作区差异 |
+
+例如，`/lw-review b` 看合入报告，`/lw-check a` 检查台账里的回归。Claude Code 里用 `/light-work:lw-review` 和 `/light-work:lw-check`，Codex 里用 `$lw-review` 和 `$lw-check`。
+
+编辑流程内部调用 review 或 check 时，使用编辑前记录的起点和实际条目号核对本轮。常规编辑结束后由 review 收尾，check 用于需要额外核对回归时。手动调用按参数选择范围，发现问题时输出证据。没有收尾点的条目会提示 diff 暂不可用。
 
 **查一行代码的来历**（不是命令，修 bug 时 `lw-edit` 会自己用，你也可以直接让 AI 跑）：`python3 ~/.light-work/lw.py why src/a.ts:42` → 这行是哪个提交、哪条台账改动引入的，当时的意图、约束、根因，后来有没有被推翻。还没提交的行，会归到登记了这个文件的 open 条目。
 
@@ -268,7 +276,7 @@ handoff 解决的"接着干"，在这里也有：**每次开新会话时，插�
 你的业务仓库/
   .light-work/                       已自动加进 .git/info/exclude，不会被提交
     feature-voice-search.md          这个分支的台账（每个分支一个文件，就这一份）
-    feature-voice-search.html        /lw-report 或 /lw-branch 生成的网页（只有运行命令时才有，每次覆盖）
+    feature-voice-search.html        /lw-review 生成的网页（只有运行命令时才有，每次覆盖）
     fix-login.md                     另一个分支的台账
   .git/refs/light-work/…             台账起点和每次收尾的快照（git 内部对象，不在任何分支上，不会被推送）
 ```
@@ -303,8 +311,9 @@ plugins/light-work/
   .claude-plugin/plugin.json         插件清单（.codebuddy-plugin/、.codex-plugin/ 下各有一份，版本号保持一致）
   hooks/hooks.json                   5 个钩子
   scripts/lw.py                      确定性核心（纯标准库）
-  skills/lw-record/  lw-edit/  lw-review/     自动
-  skills/lw-check/   lw-report/  lw-branch/   手动命令（各带 agents/openai.yaml，Codex 里也不会自动触发）
+  skills/lw-record/  lw-edit/             自动
+  skills/lw-review/                      自动或手动
+  skills/lw-check/                       按需检查
 docs/design.md                       数据格式、分级规则、钩子行为
 tests/smoke.sh                       端到端冒烟测试
 ```

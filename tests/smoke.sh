@@ -104,6 +104,7 @@ expect "编辑前注入文件约束" "$out" "C-002.1"
 out=$(hook pre-edit "$EDIT"); [ -z "$out" ] && ok "同一约束不重复提示" || fail "重复提示" "$out"
 
 echo "技能：lw-edit 改代码 → 钩子：结束前"
+first_round_base=$($L snapshot)
 python3 - <<'EOF'
 p = "src/search/voice.ts"; s = open(p).read()
 s = s.replace('  return { ok: true, data: res };',
@@ -122,7 +123,7 @@ python3 -c 'import json, sys; assert set(json.loads(sys.argv[1])) == {"systemMes
 out=$(hook stop "{\"cwd\":\"$REPO\"}"); [ -z "$out" ] && ok "同一份改动只提醒一次" || fail "重复提醒" "$out"
 
 echo "技能：lw-review"
-out=$($L score); expect "score 给出级别" "$out" "级别: L"
+out=$($L score --base "$first_round_base"); expect "score 给出级别" "$out" "级别: L"
 expect "一层调用方：本轮没改但调用了改过的函数" "$out" "handleResult → src/ui/page.ts"
 expect "score 列出要核对的约束" "$out" "C-001.2"
 python3 - <<'EOF'
@@ -132,7 +133,7 @@ s = s.replace("- 级别: 待定", "- 级别: L0").replace("- 验证: ✗ 未验�
 open(p, "w").write(s)
 EOF
 out=$($L lint); expect "定稿后 lint 通过" "$out" "台账格式正常"
-out=$($L checkpoint --entry C-002); expect "收尾点归属条目" "$out" "归属 C-002"
+out=$($L checkpoint --entry C-002 --base "$first_round_base"); expect "收尾点归属条目" "$out" "归属 C-002"
 out=$(hook stop "{\"cwd\":\"$REPO\"}"); [ -z "$out" ] && ok "收尾后保持安静" || fail "收尾后仍有提醒" "$out"
 
 echo "第二个需求：改写了上一条的代码"
@@ -149,21 +150,51 @@ cat >> .light-work/feature-voice.md <<'EOF'
 - 过程: R1 用户提出
 - 级别: L1
 EOF
+printf 'export const existingWork = 1;\n' > src/unrelated.ts
+round_base=$($L snapshot)
 cat > src/search/voice.ts <<'EOF'
 export function handleResult(res) {
   if (res === null || res === "") return { ok: false, reason: "fail" };
   return { ok: true, data: res };
 }
 EOF
-out=$($L score); expect "删除导出被识别为接口变化" "$out" "删除 src/search/voice.ts"
-$L checkpoint --entry C-003 >/dev/null
+out=$($L review --base "$round_base" --current-entry C-003)
+expect "删除导出被识别为接口变化" "$out" "删除 src/search/voice.ts"
+for command in review check; do
+  out=$($L "$command" --base "$round_base" --current-entry C-003 --json)
+  python3 -c 'import json, sys; d = json.loads(sys.argv[1]); assert d["range"] == "C-003 的本轮改动" and d["eff_files"] == ["src/search/voice.ts"] and [e["id"] for e in d["entries"]] == ["C-003"]' "$out" &&
+    ok "$command 内部调用只看本轮差异和条目" || fail "$command 内部调用混入其他改动" "$out"
+done
+$L checkpoint --entry C-003 --base "$round_base" >/dev/null
+git rev-list --objects refs/light-work/cp/feature-voice > "$TMP/checkpoint-objects"
+grep -q "^$round_base " "$TMP/checkpoint-objects" && ok "收尾点保留本轮起点 tree" || fail "收尾点未引用起点 tree" ""
 
 echo "命令：/lw-check 的确定性部分"
 out=$($L conflicts)
 expect "发现回退/改写" "$out" "C-003 删除/改写了 C-002"
 expect "发现热点" "$out" "handleResult ← C-002 → C-003"
-out=$($L check); expect "台账范围核对" "$out" "台账范围"
-out=$($L score --entry C-002); expect "单条目 diff" "$out" "C-002 的 1 轮修改"
+out=$($L check); expect "check 默认最近一条" "$out" "C-003 的 1 轮修改"
+expect "check 只显示所选条目的状态" "$out" "未定稿 open: C-003"
+out=$($L check all); expect "全部只包含已归属的收尾轮次" "$out" "全部台账改动（2 条，2 轮）"
+expect "全部说明哪些条目缺少收尾点" "$out" "暂无收尾点: C-001"
+for command in review check; do
+  out=$($L "$command"); expect "$command 默认最近一条" "$out" "C-003 的 1 轮修改"
+  out=$($L "$command" C-002); expect "$command 支持指定条目" "$out" "C-002 的 1 轮修改"
+  all=$($L "$command" all --json)
+  [ "$all" = "$($L "$command" a --json)" ] && ok "$command a 等价于 all" || fail "$command 的 all 别名不一致" "$all"
+  grep -qF "src/unrelated.ts" <<<"$all" && fail "$command all 混入未登记改动" "$all" || ok "$command all 排除未登记改动"
+  branch=$($L "$command" branch --json)
+  [ "$branch" = "$($L "$command" b --json)" ] && ok "$command b 等价于 branch" || fail "$command 的 branch 别名不一致" "$branch"
+  expect "$command branch 包含未登记改动" "$branch" "src/unrelated.ts"
+  from_subdir=$(cd src/search && $L "$command" branch --json)
+  [ "$branch" = "$from_subdir" ] && ok "$command branch 在子目录仍覆盖全仓库" || fail "$command 在子目录缩小了范围" "$from_subdir"
+  for invalid_scope in brach 全部 全分支; do
+    out=$($L "$command" "$invalid_scope" 2>&1) && fail "$command 接受了无效范围 $invalid_scope" "$out"
+    expect "$command 拒绝无效范围 $invalid_scope" "$out" "范围须为 C-xxx、all 或 branch"
+  done
+done
+out=$($L conflicts --recorded-only); expect "全部检查可核对已收尾条目之间的回退" "$out" "C-003 删除/改写了 C-002"
+rm src/unrelated.ts
 
 echo "反复修改提醒 / lint 证据规则"
 python3 - <<'EOF'
@@ -230,6 +261,8 @@ expect "apply_patch 改动漏收尾时提示" "$out" '"systemMessage"'
 echo '// 再改一点' >> src/ui/page.ts
 out=$(hook stop "{\"cwd\":\"$REPO\"}")
 expect "出现新改动后可再提醒" "$out" '"systemMessage"'
+out=$($L review 2>&1) && fail "缺少收尾点时选了其他差异" "$out"
+expect "缺少收尾点时说明单条 diff 暂不可用" "$out" "C-001 还没有收尾点"
 out=$($L why src/ui/page.ts:3); expect "why：未提交的行归到 open 条目" "$out" "还没提交的改动"
 expect "why：未提交的行找到条目" "$out" "C-001 · change · open"
 

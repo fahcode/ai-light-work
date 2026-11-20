@@ -8,7 +8,7 @@
 | 约束 | 改代码前把相关约束交给 AI；改完逐条核对 | 钩子 + `lw.py context/score`（确定性），判断由模型做；明确冲突由 `lw-edit` 的冲突闸门交给用户选 |
 | 呈现 | 按复杂度出 L0~L3 卡片 | `lw.py score` 定级别和素材，`lw-review` 写讲解 |
 | 检查 | 条目之间的冲突、回归 | `lw.py conflicts/check` 找候选，`/lw-check` 判定 |
-| 报告 | 台账范围 / 整个分支 | `/lw-report`、`/lw-branch` 写 Markdown，经 stdin 交给 `lw.py view` 渲染成 `.light-work/<分支>.html` |
+| 报告 | 整个分支的合入报告 | `/lw-review branch` 写 Markdown，经 stdin 交给 `lw.py view` 渲染成 `.light-work/<分支>.html` |
 
 原则：**能用规则算出来的放进脚本，结果可复现；模型只做蒸馏、判定和讲解。**
 
@@ -80,13 +80,15 @@
 
 ## 范围
 
-| 参数 | 范围 | 默认用于 |
-|---|---|---|
-| `--since-checkpoint` | 上次收尾点 → 工作区 | `score`（每次出卡片） |
-| `--ledger` | 台账起点 → 工作区 | `check`、`/lw-report` |
-| `--branch` | 与基准分支的分叉点 → 工作区 | `/lw-branch` |
-| `--entry C-xxx` | 这个条目所有轮次的改动（可能不连续） | `/lw-report C-xxx` |
-| `--base REF` | REF → 工作区 | 临时用 |
+| review / check 参数 | 范围 |
+|---|---|
+| 空 | 最近一条台账改动 |
+| `C-xxx` | 指定条目已收尾的各轮差异 |
+| `all` / `a` | 所有台账条目的已收尾轮次 |
+| `branch` / `b` | 与基准分支的分叉点 → 工作区 |
+| `--base REF --current-entry C-xxx` | 编辑流程内部使用，范围是本轮起点 → 工作区 |
+
+`lw.py review` 和 `lw.py check` 共用范围解析。review 输出人工审阅所需的改动、影响面和证据，分支模式生成合入报告。check 输出回归、冲突及验证缺口。手动调用缺少收尾点时提示差异不可用。底层 `score` 仍可用于查看上次收尾点后的差异。
 
 "工作区"包括未提交、未跟踪的文件（遵守 .gitignore）。脚本用一个临时 index 把工作区写成 git tree，不会动你的真实 index。
 
@@ -95,7 +97,7 @@
 | ref | 内容 |
 |---|---|
 | `refs/light-work/start/<slug>` | 第一次建台账时的工作区，即"台账范围"的起点 |
-| `refs/light-work/cp/<slug>` | 收尾点链。每次 `checkpoint --entry C-xxx` 生成一个提交对象，记录 `entry=` 和 `from=`（本轮改动的起点） |
+| `refs/light-work/cp/<slug>` | 收尾点链。自动 review 用 `checkpoint --entry C-xxx --base REF` 记录条目和本轮起点。起点 tree 由收尾点引用，供以后按条目审阅 |
 
 `/lw-check` 靠收尾点链拿到每个条目每一轮的 diff，再算出：
 - **回退/改写**：后面条目删掉的行，正好是前面条目加的
@@ -146,11 +148,14 @@ L="python3 ~/.light-work/lw.py"
 $L init                            # 不用手动跑，钩子会自动做
 $L context --files src/a.ts       # 改 a.ts 之前要知道的约束
 $L next-id
-$L score [范围] [--hunks N] [--json]
-$L checkpoint --entry C-004
+$L review [C-xxx | all | branch] [--hunks N] [--json]
+$L review --base <tree SHA> --current-entry C-004
+$L snapshot                        # 编辑前获取本轮起点 tree SHA
+$L checkpoint --entry C-004 --base <tree SHA>
 $L ask                            # 冲突闸门提问前
 $L why src/a.ts:42 [src/b.ts:10-20]   # 这行是哪条台账改动引入的
-$L check [范围] [--json]
+$L check [C-xxx | all | branch] [--json]
+$L check --base <tree SHA> --current-entry C-004
 $L conflicts [--json]
 $L lint | stats | backfill
 $L view [--title T] [--open] < report.md   # 渲染成 .light-work/<分支>.html

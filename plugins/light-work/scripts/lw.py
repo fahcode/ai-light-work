@@ -9,10 +9,11 @@
 技能调用:
   context [--files a b]        改代码前要知道的约束
   next-id [--baseline]         下一个条目编号
+  review [C-xxx | all | branch] 改动审阅（默认：最近一条）
+  check [C-xxx | all | branch]  回归核对（默认：最近一条）
   score [范围] [--hunks N]     复杂度 L0-L3 + 依据 + 影响面 + 真实 diff 片段（默认：上次收尾点..工作区）
   checkpoint --entry C-xxx     收尾：记录本轮改动归属哪个条目
   ask                          冲突闸门：向用户确认前调用，本轮跳过收尾提醒
-  check [范围]                 回归核对清单（默认：台账范围）
   conflicts                    条目之间的重叠、回退、反复修改
   why 文件:行 [...]             这一行是哪条台账改动引入的：意图、约束、根因、后来有没有被推翻
   lint / stats / backfill
@@ -21,7 +22,7 @@
 
 存储（全自动，用户不需要关心）:
   <仓库>/.light-work/<分支>.md     每个分支一份台账（已写入 .git/info/exclude）
-  <仓库>/.light-work/<分支>.html   /lw-report、/lw-branch 生成的网页（最近一次）
+  <仓库>/.light-work/<分支>.html   /lw-review 生成的网页（最近一次）
   refs/light-work/start|cp/<分支>          台账起点和收尾点快照（不在任何分支上）
 """
 import argparse
@@ -346,7 +347,8 @@ def checkpoint_chain(br=None):
         tree, subj = rec.split("\x1f", 1)
         m_e = re.search(r"entry=(\S+)", subj)
         m_f = re.search(r"from=([0-9a-f]+)", subj)
-        chain.append({"tree": tree, "entry": m_e.group(1) if m_e else None, "from": m_f.group(1) if m_f else None})
+        if m_f:
+            chain.append({"tree": tree, "entry": m_e.group(1) if m_e else None, "from": m_f.group(1)})
     chain.reverse()
     return chain
 
@@ -355,14 +357,38 @@ def head_or_empty():
     return git("rev-parse", "HEAD^{tree}").strip() if has_head() else empty_tree()
 
 
-def resolve_range(root, cfg, mode, ref=None):
-    """返回 ([(base, cur), ...], 说明)。多段只在 entry 模式出现（同一条目的多轮修订）。"""
-    br = current_branch()
+def change_entries(entries):
+    return [e for e in entries if e["type"] != "baseline" and e["status"] != "dropped"]
+
+
+def entry_ranges(entries, mode, ref):
+    selected = change_entries(entries)
     if mode == "entry":
-        segs = [(c["from"], c["tree"]) for c in checkpoint_chain(br) if c["entry"] == ref and c["from"]]
-        if not segs:
-            die("%s 还没有收尾点记录（只有 closeout 之后才有逐条 diff）" % ref)
-        return segs, "%s 的 %d 轮修改" % (ref, len(segs))
+        if ref is None and selected:
+            ref = selected[-1]["id"]
+        if ref is None:
+            die("当前分支没有可检查的台账改动。")
+        selected = [e for e in entries if e["id"] == ref and e["type"] != "baseline"]
+        if not selected:
+            die("台账没有条目 %s。" % ref)
+    ids = {e["id"] for e in selected}
+    rounds = [c for c in checkpoint_chain() if c["entry"] in ids and c["from"]]
+    recorded = {c["entry"] for c in rounds}
+    missing = [e["id"] for e in selected if e["id"] not in recorded]
+    if mode == "entry":
+        if missing:
+            die("%s 还没有收尾点，暂无可归属的 diff。" % ref)
+        label = "%s 的 %d 轮修改" % (ref, len(rounds))
+    else:
+        label = "全部台账改动（%d 条，%d 轮）" % (len(recorded), len(rounds))
+        if missing:
+            label += " · 暂无收尾点: " + ", ".join(missing)
+    return [(c["from"], c["tree"]) for c in rounds], label, selected
+
+
+def resolve_range(root, cfg, mode, ref=None):
+    """返回工作区 diff 的起止点和说明。"""
+    br = current_branch()
     cur = worktree_tree(root)
     if mode == "base":
         if not git_ok("rev-parse", "--verify", "-q", ref):
@@ -400,10 +426,10 @@ def merge_diffs(parts):
     return out
 
 
-def parse_diff(base, cur):
+def parse_diff(root, base, cur):
     """返回 {path: {"add","del","lines":[(+/-, text)], "hunks":[...]}}"""
     files = {}
-    num = git("diff", "--numstat", "--no-renames", base, cur, "--", ".", ":(exclude)%s" % LEDGER_DIR)
+    num = git("diff", "--numstat", "--no-renames", base, cur, "--", ".", ":(exclude)%s" % LEDGER_DIR, cwd=root)
     for ln in num.splitlines():
         parts = ln.split("\t")
         if len(parts) < 3:
@@ -413,7 +439,7 @@ def parse_diff(base, cur):
                     "binary": a == "-", "lines": [], "hunks": []}
     if not files:
         return files
-    raw = git("diff", "-U2", "--no-renames", "--no-color", base, cur, "--", ".", ":(exclude)%s" % LEDGER_DIR)
+    raw = git("diff", "-U2", "--no-renames", "--no-color", base, cur, "--", ".", ":(exclude)%s" % LEDGER_DIR, cwd=root)
     curf, hunk = None, None
     for ln in raw.splitlines():
         if ln.startswith("diff --git"):
@@ -451,9 +477,20 @@ def module_key(path, depth):
     return "/".join(parts[:depth]) if parts else "."
 
 
-def analyze(root, cfg, mode="checkpoint", ref=None, nhunks=4):
-    segs, label = resolve_range(root, cfg, mode, ref)
-    diff = merge_diffs([parse_diff(b, c) for b, c in segs])
+def analyze(root, cfg, mode="checkpoint", ref=None, nhunks=4, current_entry=None):
+    lp = ledger_path(root)
+    entries, _ = parse_ledger(lp)
+    scoped_entries = entries
+    if mode in ("entry", "all_entries"):
+        segs, label, scoped_entries = entry_ranges(entries, mode, ref)
+    else:
+        segs, label = resolve_range(root, cfg, mode, ref)
+        if current_entry:
+            scoped_entries = [e for e in change_entries(entries) if e["id"] == current_entry]
+            if not scoped_entries:
+                die("台账没有可用条目 %s。" % current_entry)
+            label = "%s 的本轮改动" % current_entry
+    diff = merge_diffs([parse_diff(root, b, c) for b, c in segs])
     L = cfg["levels"]
     test_re = re.compile(cfg["test_regex"])
     eff_files, test_files, skipped = [], [], []
@@ -510,8 +547,6 @@ def analyze(root, cfg, mode="checkpoint", ref=None, nhunks=4):
     hi_weak = sorted(set(hi_line) - set(hi_strong))
 
     # 台账交叉
-    lp = ledger_path(root)
-    entries, _ = parse_ledger(lp)
     act, _ = active_constraints(entries)
     changed = list(diff.keys())
     touched = [c for c in act if not c["global"] and any(path_match(p, c["files"]) for p in changed)]
@@ -591,7 +626,7 @@ def analyze(root, cfg, mode="checkpoint", ref=None, nhunks=4):
     syms = []
     for p in eff_files[:10]:
         for b, c in segs:
-            for n in changed_symbols(b, c, p):
+            for n in changed_symbols(root, b, c, p):
                 if n and n not in skip and len(n) >= 4 and n not in syms:
                     syms.append(n)
     for n in syms[:8]:
@@ -629,7 +664,7 @@ def analyze(root, cfg, mode="checkpoint", ref=None, nhunks=4):
         "modules": modules, "iface": iface[:12], "new_exports": new_exports[:12], "schema": schema, "config": config,
         "sensitive": {"strong": hi_strong, "weak": hi_weak, "medium": sorted(md_hits)},
         "impact": impact, "callers": callers, "touched_constraints": touched, "global_constraints": globals_, "unregistered": unregistered,
-        "entries": entries, "hunks": top, "ledger": os.path.relpath(lp, root),
+        "entries": scoped_entries, "hunks": top, "ledger": os.path.relpath(lp, root),
     }
 
 
@@ -674,10 +709,11 @@ def install_hook(root):
     print("  · 已安装 post-commit 钩子（提交后自动把 SHA 回填到台账）")
 
 
-def make_commit(tree, msg, parent=None):
+def make_commit(tree, msg, *parents):
     args = ["commit-tree", tree, "-m", msg]
-    if parent:
-        args += ["-p", parent]
+    for parent in parents:
+        if parent:
+            args += ["-p", parent]
     env = dict(os.environ)
     for k, v in (("GIT_AUTHOR_NAME", "ai-light-work"), ("GIT_AUTHOR_EMAIL", "light-work@local"),
                  ("GIT_COMMITTER_NAME", "ai-light-work"), ("GIT_COMMITTER_EMAIL", "light-work@local")):
@@ -854,12 +890,26 @@ def strip_for_json(r):
     return out
 
 
+def parse_scope(value):
+    if value in ("all", "a"):
+        return "all_entries", None
+    if value in ("branch", "b"):
+        return "branch", None
+    if re.fullmatch(r"C-\d{3,}", value):
+        return "entry", value
+    raise argparse.ArgumentTypeError("范围须为 C-xxx、all 或 branch")
+
+
 def pick_mode(a, default):
+    if getattr(a, "scope", None):
+        return a.scope
     if getattr(a, "entry", None):
         return "entry", a.entry
     if getattr(a, "base", None):
         return "base", a.base
-    for m in ("branch", "ledger", "since_checkpoint"):
+    if getattr(a, "latest_entry", False):
+        return "entry", None
+    for m in ("branch", "ledger", "since_checkpoint", "all_entries"):
         if getattr(a, m, False):
             return ("checkpoint" if m == "since_checkpoint" else m), None
     return default, None
@@ -868,8 +918,8 @@ def pick_mode(a, default):
 def cmd_score(a):
     root = repo_root()
     cfg = load_cfg(root)
-    mode, ref = pick_mode(a, "checkpoint")
-    r = analyze(root, cfg, mode, ref, a.hunks)
+    mode, ref = pick_mode(a, "checkpoint" if a.cmd == "score" else "entry")
+    r = analyze(root, cfg, mode, ref, a.hunks, a.current_entry)
     if a.json:
         print(json.dumps(strip_for_json(r), ensure_ascii=False, indent=1))
     else:
@@ -879,8 +929,8 @@ def cmd_score(a):
 def cmd_check(a):
     root = repo_root()
     cfg = load_cfg(root)
-    mode, ref = pick_mode(a, "ledger")
-    r = analyze(root, cfg, mode, ref, a.hunks)
+    mode, ref = pick_mode(a, "entry")
+    r = analyze(root, cfg, mode, ref, a.hunks, a.current_entry)
     _, errors = parse_ledger(ledger_path(root))
     if a.json:
         print(json.dumps(strip_for_json(r), ensure_ascii=False, indent=1))
@@ -921,7 +971,7 @@ def cmd_checkpoint(a):
     root = repo_root()
     cfg = load_cfg(root)
     br = current_branch()
-    segs, _ = resolve_range(root, cfg, "checkpoint")
+    segs, _ = resolve_range(root, cfg, "base" if a.base else "checkpoint", a.base)
     frm, tree = segs[0]
     frm_tree = git("rev-parse", frm + "^{tree}").strip()
     if frm_tree == tree and not a.force:
@@ -930,12 +980,20 @@ def cmd_checkpoint(a):
         return
     ref = cp_ref(br)
     parent = git("rev-parse", ref).strip() if git_ok("rev-parse", "--verify", "-q", ref) else None
+    base_parent = None
+    if a.base and (not parent or frm_tree != git("rev-parse", parent + "^{tree}").strip()):
+        # 起点可能包含本轮前已有的改动，保留该 tree 供后续按条目取 diff。
+        base_parent = make_commit(frm_tree, "light-work round start")
     msg = "ledger checkpoint entry=%s from=%s at=%s" % (a.entry or "-", frm_tree,
                                                          _dt.datetime.now().isoformat(timespec="seconds"))
-    git("update-ref", ref, make_commit(tree, msg, parent))
+    git("update-ref", ref, make_commit(tree, msg, parent, base_parent))
     state_clear(root)
     print("✓ 收尾点已记录（%s%s）。下次 score 默认只看这之后的增量。" % (
         tree[:7], "，归属 " + a.entry if a.entry else ""))
+
+
+def cmd_snapshot(a):
+    print(worktree_tree(repo_root()))
 
 
 def cmd_lint(a):
@@ -1056,14 +1114,15 @@ def sym_of(text):
     return m.group(1) if m else None
 
 
-def blob_lines(tree, path):
-    out = subprocess.run(["git", "show", "%s:%s" % (tree, path)], capture_output=True, text=True, errors="replace")
+def blob_lines(root, tree, path):
+    out = subprocess.run(["git", "show", "%s:%s" % (tree, path)], cwd=root,
+                         capture_output=True, text=True, errors="replace")
     return out.stdout.splitlines() if out.returncode == 0 else []
 
 
-def changed_symbols(frm, to, path):
+def changed_symbols(root, frm, to, path):
     """本段改动落在哪些函数/类里：改动行本身是定义就用它，否则向上找最近的定义行。"""
-    raw = git("diff", "-U0", "--no-color", frm, to, "--", path, check=False)
+    raw = git("diff", "-U0", "--no-color", frm, to, "--", path, cwd=root, check=False)
     old, new = None, None
     syms = set()
     o_ln = n_ln = 0
@@ -1081,10 +1140,10 @@ def changed_symbols(frm, to, path):
         name = sym_of(text) if DEF_RE.search(text) else None
         if not name:
             if ln[0] == "-":
-                old = old if old is not None else blob_lines(frm, path)
+                old = old if old is not None else blob_lines(root, frm, path)
                 src, at = old, o_ln
             else:
-                new = new if new is not None else blob_lines(to, path)
+                new = new if new is not None else blob_lines(root, to, path)
                 src, at = new, n_ln
             for i in range(min(at, len(src)) - 1, -1, -1):
                 if DEF_RE.search(src[i]):
@@ -1104,8 +1163,12 @@ def cmd_conflicts(a):
     cfg = load_cfg(root)
     lp = ledger_path(root)
     entries, _ = parse_ledger(lp)
-    by_id = {e["id"]: e for e in entries}
     chain = checkpoint_chain()
+    ids = None
+    if a.recorded_only:
+        ids = {e["id"] for e in change_entries(entries)}
+        chain = [c for c in chain if c["entry"] in ids]
+    by_id = {e["id"]: e for e in entries}
     test_re = re.compile(cfg["test_regex"])
     per = {}          # entry -> {"rounds", "keys", "added": {file: set}, "removed": {file: set}}
     order = []
@@ -1121,10 +1184,10 @@ def cmd_conflicts(a):
             per[e] = {"rounds": 0, "keys": set(), "added": {}, "removed": {}}
             order.append(e)
         per[e]["rounds"] += 1
-        for path, v in parse_diff(c["from"], c["tree"]).items():
+        for path, v in parse_diff(root, c["from"], c["tree"]).items():
             if glob_hit(path, cfg["exclude"]) or v["binary"] or test_re.search(path):
                 continue
-            for n in changed_symbols(c["from"], c["tree"], path):
+            for n in changed_symbols(root, c["from"], c["tree"], path):
                 per[e]["keys"].add((path, n))
             for sign, text in v["lines"]:
                 t = text.strip()
@@ -1154,10 +1217,13 @@ def cmd_conflicts(a):
     hot_files = sorted({k[0] for k, _ in hotspots})
     cons_on_hot = [c for c in act if c["global"] or any(path_match(f, c["files"]) for f in hot_files)]
     many_rounds = [(e, per[e]["rounds"]) for e in order if per[e]["rounds"] >= 3]
-    sup = [(e["id"], e["supersedes"]) for e in entries if e["supersedes"]]
+    sup = [(e["id"], e["supersedes"]) for e in entries
+           if e["supersedes"] and (ids is None or e["id"] in ids)]
     # 未收尾
-    segs, _ = resolve_range(root, cfg, "checkpoint")
-    pending = git("rev-parse", segs[0][0] + "^{tree}").strip() != segs[0][1]
+    pending = False
+    if not a.recorded_only:
+        segs, _ = resolve_range(root, cfg, "checkpoint")
+        pending = git("rev-parse", segs[0][0] + "^{tree}").strip() != segs[0][1]
 
     res = {"entries_with_diff": order, "unowned_rounds": unowned,
            "hotspots": [{"file": k[0], "symbol": k[1], "entries": v} for k, v in hotspots],
@@ -1200,8 +1266,8 @@ WORKFLOW = """[ai-light-work] 当前分支 {branch} 的变更台账：{ledger}�
 结合上下文确认用户要求动手修改代码（修 bug / 需求变更 / 调整行为）后，按顺序自动执行：
   1. lw-record  先把这次意图记成 open 条目（同一意图的续改就更新原条目；推翻已有约束先问用户）
   2. lw-edit    bug 先找根因；按"手术刀"原则改代码；改动明显和台账约束冲突而用户没提时，先用一句话请用户选
-  3. lw-review  定稿条目 → 按约束自检 → 输出 L0-L3 review 卡片 → checkpoint --entry
-纯问答、读代码、解释、跑命令不记账。lw-check、lw-report、lw-branch 是手动命令，只在用户明确调用时执行（Claude Code 里是 /light-work:lw-check，Codex 里是 $lw-check），不要自己去跑。
+  3. lw-review  用编辑前快照审阅本轮 → 定稿条目 → 输出 review 卡片 → 记录收尾点
+按需调用 lw-check 核对回归和验证缺口。编辑流程调用 review 或 check 时传入本轮起点和条目号；用户直接调用时默认最近一条，支持 C-xxx、all、branch。纯问答、读代码、解释、跑命令不记账。
 查 bug 想知道某行代码是哪次改动、为什么这么写：$LW why 文件:行。台账、状态、快照全部自动维护，不要让用户做任何设置。"""
 
 CHANGE_INTENT = re.compile(
@@ -1567,7 +1633,7 @@ const esc=t=>t.replace(/[&<>]/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;'}}[c]));
 
 def cmd_view(a):
     """把报告 Markdown（从 stdin 读）渲染成 .light-work/<分支>.html，流程图会渲染成图；页面末尾附原始台账。
-    不落中间文件：/lw-report、/lw-branch 每次生成都覆盖这一页。"""
+    不落中间文件：/lw-review 每次生成都覆盖这一页。"""
     root = repo_root()
     br = current_branch()
     lp = ledger_path(root, br)
@@ -1604,20 +1670,31 @@ def main():
     p = sp.add_parser("context"); p.add_argument("--files", nargs="*"); p.add_argument("--limit", type=int, default=30)
     p.set_defaults(fn=cmd_context)
     p = sp.add_parser("next-id"); p.add_argument("--baseline", action="store_true"); p.set_defaults(fn=cmd_next_id)
-    for name, fn, nh in (("score", cmd_score, 4), ("check", cmd_check, 0)):
+    for name, fn, nh in (("review", cmd_score, 4), ("check", cmd_check, 0), ("score", cmd_score, 4)):
         p = sp.add_parser(name)
         g = p.add_mutually_exclusive_group()
+        if name != "score":
+            g.add_argument("scope", nargs="?", type=parse_scope, metavar="[C-xxx | all | branch]",
+                           help="默认最近一条；全部用 all/a，全分支用 branch/b")
         g.add_argument("--base", help="从指定 ref 到工作区")
+        p.add_argument("--current-entry", help="与 --base 一起标记编辑流程的本轮条目")
         g.add_argument("--branch", action="store_true", help="整个分支（分叉点..工作区）")
         g.add_argument("--ledger", action="store_true", help="台账范围（台账起点..工作区）")
         g.add_argument("--since-checkpoint", action="store_true", help="上次收尾点..工作区")
         g.add_argument("--entry", help="某个条目所有轮次的改动，如 C-004")
+        if name == "score":
+            g.add_argument("--latest-entry", action="store_true", help="最近一条台账改动")
+        else:
+            g.add_argument("--all-entries", action="store_true", help="所有台账条目已收尾的改动")
         p.add_argument("--hunks", type=int, default=nh)
         p.add_argument("--json", action="store_true")
         p.set_defaults(fn=fn)
-    p = sp.add_parser("checkpoint"); p.add_argument("--entry"); p.add_argument("--force", action="store_true")
+    sp.add_parser("snapshot", help="获取本轮编辑前的工作区 tree").set_defaults(fn=cmd_snapshot)
+    p = sp.add_parser("checkpoint"); p.add_argument("--entry"); p.add_argument("--base"); p.add_argument("--force", action="store_true")
     p.set_defaults(fn=cmd_checkpoint)
-    p = sp.add_parser("conflicts"); p.add_argument("--json", action="store_true"); p.set_defaults(fn=cmd_conflicts)
+    p = sp.add_parser("conflicts"); p.add_argument("--json", action="store_true")
+    p.add_argument("--recorded-only", action="store_true", help="只分析已归属台账条目的收尾点")
+    p.set_defaults(fn=cmd_conflicts)
     sp.add_parser("lint").set_defaults(fn=cmd_lint)
     sp.add_parser("ask", help="冲突闸门提问前调用").set_defaults(fn=cmd_ask)
     p = sp.add_parser("why", help="这一行是哪条台账改动引入的"); p.add_argument("targets", nargs="+", metavar="文件:行")
@@ -1625,10 +1702,12 @@ def main():
     p = sp.add_parser("backfill"); p.add_argument("--commit", default="HEAD"); p.set_defaults(fn=cmd_backfill)
     sp.add_parser("stats").set_defaults(fn=cmd_stats)
     p = sp.add_parser("view"); p.add_argument("--open", action="store_true")
-    p.add_argument("--title", help="页面标题，如：台账改动报告 / 分支汇总 / C-004 详报"); p.set_defaults(fn=cmd_view)
+    p.add_argument("--title", help="页面标题，如：分支汇总 / C-004 review"); p.set_defaults(fn=cmd_view)
     p = sp.add_parser("hook"); p.add_argument("event", choices=["session-start", "prompt", "pre-edit", "post-edit", "stop"])
     p.set_defaults(fn=cmd_hook)
     a = ap.parse_args()
+    if getattr(a, "current_entry", None) and not a.base:
+        ap.error("--current-entry 需要同时提供 --base")
     if not getattr(a, "fn", None):
         ap.print_help()
         return
