@@ -8,7 +8,7 @@
 | 约束 | 改代码前把相关约束交给 AI；改完逐条核对 | 钩子 + `lw.py context/score`（确定性），判断由模型做；明确冲突由 `lw-edit` 的冲突闸门交给用户选 |
 | 呈现 | 按复杂度出 L0~L3 卡片 | `lw.py score` 定级别和素材，`lw-review` 写讲解 |
 | 检查 | 条目之间的冲突、回归 | `lw.py conflicts/check` 找候选，`/lw-check` 判定 |
-| 报告 | 整个分支的合入报告 | `/lw-review branch` 写 Markdown，经 stdin 交给 `lw.py view` 渲染成 `.light-work/<分支>.html` |
+| 报告 | 审阅结论与代码证据 | `lw.py view` 接收结论和范围参数，生成带文件导航与 Git diff 的本地网页 |
 
 原则：**能用规则算出来的放进脚本，结果可复现；模型只做蒸馏、判定和讲解。**
 
@@ -92,6 +92,14 @@
 
 "工作区"包括未提交、未跟踪的文件（遵守 .gitignore）。脚本用一个临时 index 把工作区写成 git tree，不会动你的真实 index。
 
+## 审阅网页
+
+`view --scope latest|C-xxx|all|branch` 复用审阅的范围。自动审阅使用 `view --base REF --current-entry C-xxx`。Python 直接渲染范围、文件增删统计、代码证据和台账信息。助手通过标准输入补充解释和验证结论，反引号中的 `文件:行` 链接到对应补丁行或文件。多轮存在同一行号时优先使用最近的新版行，补丁标题保留快照范围。
+
+生成产物、锁文件等被评分规则排除的文件只展示路径与统计。普通文件优先展示正文引用的差异，其余以有限的补丁片段作为补充。网页标明省略的片段和行数。完整差异通过 Git 查看。
+
+正文支持标题、列表、表格和代码块。L0、L1 以聊天短卡片为主。L2、L3 或分支报告可使用 `flow`、`sequence`、`architecture` 画流程、交互和模块关系，每行按 `来源 -> 目标 | 说明` 书写。简单 `flow` 也可每行写一个步骤。历史 Mermaid 块保留源文本。摘要、导航、补丁、图和台账均可离线阅读。省略范围参数时，`view` 仍可接收纯说明文字。
+
 ## 快照
 
 | ref | 内容 |
@@ -158,5 +166,5 @@ $L check [C-xxx | all | branch] [--json]
 $L check --base <tree SHA> --current-entry C-004
 $L conflicts [--json]
 $L lint | stats | backfill
-$L view [--title T] [--open] < report.md   # 渲染成 .light-work/<分支>.html
+$L view --scope branch [--title T] [--open] < report.md   # 渲染成 .light-work/<分支>.html
 ```

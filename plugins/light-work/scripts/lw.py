@@ -26,8 +26,10 @@
   refs/light-work/start|cp/<分支>          台账起点和收尾点快照（不在任何分支上）
 """
 import argparse
+import codecs
 import datetime as _dt
 import fnmatch
+from html import escape
 import json
 import os
 import re
@@ -426,12 +428,20 @@ def merge_diffs(parts):
     return out
 
 
+def diff_header_path(value):
+    value = value.rstrip("\t")
+    if value.startswith('"') and value.endswith('"'):
+        # Git 对引号、控制字符等路径使用 C 字符串转义。
+        value = codecs.escape_decode(value[1:-1].encode("utf-8"))[0].decode("utf-8", errors="replace")
+    return value
+
+
 def parse_diff(root, base, cur):
     """返回 {path: {"add","del","lines":[(+/-, text)], "hunks":[...]}}"""
     files = {}
-    num = git("diff", "--numstat", "--no-renames", base, cur, "--", ".", ":(exclude)%s" % LEDGER_DIR, cwd=root)
-    for ln in num.splitlines():
-        parts = ln.split("\t")
+    num = git("diff", "--numstat", "-z", "--no-renames", base, cur, "--", ".", ":(exclude)%s" % LEDGER_DIR, cwd=root)
+    for ln in num.split("\0"):
+        parts = ln.split("\t", 2)
         if len(parts) < 3:
             continue
         a, d, p = parts[0], parts[1], parts[2]
@@ -439,19 +449,20 @@ def parse_diff(root, base, cur):
                     "binary": a == "-", "lines": [], "hunks": []}
     if not files:
         return files
-    raw = git("diff", "-U2", "--no-renames", "--no-color", base, cur, "--", ".", ":(exclude)%s" % LEDGER_DIR, cwd=root)
+    raw = git("-c", "core.quotePath=false", "diff", "-U2", "--no-renames", "--no-color",
+              base, cur, "--", ".", ":(exclude)%s" % LEDGER_DIR, cwd=root)
     curf, hunk = None, None
     for ln in raw.splitlines():
         if ln.startswith("diff --git"):
             curf, hunk = None, None
             continue
-        if ln.startswith("+++ "):
-            p = ln[4:]
+        if hunk is None and ln.startswith("+++ "):
+            p = diff_header_path(ln[4:])
             if p.startswith("b/"):  # 删除文件时这里是 /dev/null，沿用 --- a/x 的文件名
                 curf = p[2:]
             continue
-        if ln.startswith("--- "):
-            p = ln[4:]
+        if hunk is None and ln.startswith("--- "):
+            p = diff_header_path(ln[4:])
             if p.startswith("a/"):
                 curf = p[2:]
             continue
@@ -459,14 +470,16 @@ def parse_diff(root, base, cur):
         if m and curf in files:
             new_len = int(m.group(4) or 1)
             start, ln_ = (int(m.group(3)), new_len) if new_len else (int(m.group(1)), int(m.group(2) or 1))  # 纯删除用旧行号
-            hunk = {"start": start, "len": ln_, "ctx": m.group(5).strip(),
+            hunk = {"start": start, "len": ln_, "ctx": m.group(5).strip(), "header": ln,
+                    "old_start": int(m.group(1)), "new_start": int(m.group(3)),
+                    "old_len": int(m.group(2) or 1), "new_len": new_len,
                     "body": [], "changed": 0}
             files[curf]["hunks"].append(hunk)
             continue
         if hunk is None or curf not in files:
             continue
         hunk["body"].append(ln)
-        if ln[:1] in "+-" and not ln.startswith(("+++", "---")):
+        if ln.startswith(("+", "-")):
             hunk["changed"] += 1
             files[curf]["lines"].append((ln[0], ln[1:]))
     return files
@@ -477,7 +490,7 @@ def module_key(path, depth):
     return "/".join(parts[:depth]) if parts else "."
 
 
-def analyze(root, cfg, mode="checkpoint", ref=None, nhunks=4, current_entry=None):
+def analyze(root, cfg, mode="checkpoint", ref=None, nhunks=4, current_entry=None, evidence=False):
     lp = ledger_path(root)
     entries, _ = parse_ledger(lp)
     scoped_entries = entries
@@ -490,7 +503,15 @@ def analyze(root, cfg, mode="checkpoint", ref=None, nhunks=4, current_entry=None
             if not scoped_entries:
                 die("台账没有可用条目 %s。" % current_entry)
             label = "%s 的本轮改动" % current_entry
-    diff = merge_diffs([parse_diff(root, b, c) for b, c in segs])
+    parts = []
+    for base, end in segs:
+        part = parse_diff(root, base, end)
+        if evidence:
+            for file_diff in part.values():
+                for hunk in file_diff["hunks"]:
+                    hunk["revision"] = "%s → %s" % (base[:8], end[:8])
+        parts.append(part)
+    diff = merge_diffs(parts)
     L = cfg["levels"]
     test_re = re.compile(cfg["test_regex"])
     eff_files, test_files, skipped = [], [], []
@@ -665,6 +686,7 @@ def analyze(root, cfg, mode="checkpoint", ref=None, nhunks=4, current_entry=None
         "sensitive": {"strong": hi_strong, "weak": hi_weak, "medium": sorted(md_hits)},
         "impact": impact, "callers": callers, "touched_constraints": touched, "global_constraints": globals_, "unregistered": unregistered,
         "entries": scoped_entries, "hunks": top, "ledger": os.path.relpath(lp, root),
+        "evidence": diff if evidence else None,
     }
 
 
@@ -885,6 +907,7 @@ def print_analysis(r, show_hunks=True, check_mode=False):
 
 def strip_for_json(r):
     out = dict(r)
+    out.pop("evidence", None)
     out["entries"] = [{k: e[k] for k in ("id", "type", "status", "title", "level", "shas", "unverified", "files")}
                       for e in r["entries"]]
     return out
@@ -898,6 +921,10 @@ def parse_scope(value):
     if re.fullmatch(r"C-\d{3,}", value):
         return "entry", value
     raise argparse.ArgumentTypeError("范围须为 C-xxx、all 或 branch")
+
+
+def parse_view_scope(value):
+    return ("entry", None) if value == "latest" else parse_scope(value)
 
 
 def pick_mode(a, default):
@@ -1595,64 +1622,394 @@ def cmd_hook(a):
     sys.exit(0)
 
 
-VIEW_HTML = r"""<!doctype html><html lang="zh"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>{title}</title>
+VIEW_HTML = """<!doctype html>
+<html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title>
 <style>
-:root{{--fg:#1f2328;--mut:#656d76;--bd:#d0d7de;--bg:#fff;--soft:#f6f8fa;--acc:#0969da}}
-@media (prefers-color-scheme:dark){{:root{{--fg:#e6edf3;--mut:#8d96a0;--bd:#30363d;--bg:#0d1117;--soft:#161b22;--acc:#4493f8}}}}
-body{{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif}}
-.wrap{{display:grid;grid-template-columns:240px 1fr;min-height:100vh}}
-nav{{border-right:1px solid var(--bd);padding:16px;position:sticky;top:0;height:100vh;overflow:auto;background:var(--soft)}}
-nav a{{display:block;color:var(--fg);text-decoration:none;padding:4px 6px;border-radius:6px;font-size:13px}}
-nav a:hover{{background:var(--bd)}} nav .l{{font-family:ui-monospace,monospace;color:var(--mut);margin-right:6px}}
-main{{padding:24px 40px;max-width:980px}} section{{border-bottom:1px solid var(--bd);padding-bottom:24px;margin-bottom:24px}}
-pre{{background:var(--soft);border:1px solid var(--bd);border-radius:8px;padding:12px;overflow:auto;font-size:13px}}
-code{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}} table{{border-collapse:collapse}} td,th{{border:1px solid var(--bd);padding:4px 8px}}
-blockquote{{margin:0 0 12px;padding:8px 14px;border-left:4px solid var(--acc);background:var(--soft);border-radius:0 8px 8px 0}}
-.add{{color:#1a7f37;background:rgba(46,160,67,.12);display:inline-block;width:100%}} .del{{color:#cf222e;background:rgba(248,81,73,.12);display:inline-block;width:100%}}
-.mermaid{{background:var(--soft);border-radius:8px;padding:12px;text-align:center}} h1{{font-size:22px}} .mut{{color:var(--mut);font-size:13px}}
-</style></head><body><div class="wrap"><nav><b>{branch}</b><div class="mut">{generated}</div><br>{nav}</nav><main id="m"></main></div>
-<script id="data" type="application/json">{data}</script>
+:root {{
+  color-scheme: light dark;
+  --background: #f4f6f9; --panel: #fff; --text: #182431; --muted: #48586b;
+  --border: #d8dfe8; --link: #1756a5; --accent: #e8f1ff;
+  --add: #e6f6ed; --del: #fce9eb;
+  --flow-ink: #124d85; --flow-wash: #eef6ff; --flow-rule: #a4c5e7;
+  --sequence-ink: #593995; --sequence-wash: #f5f0ff; --sequence-rule: #c7b5e9;
+  --architecture-ink: #166653; --architecture-wash: #eaf7f3; --architecture-rule: #9acbbd;
+}}
+@media (prefers-color-scheme: dark) {{
+  :root {{
+    --background: #10151d; --panel: #18212d; --text: #e9eff6; --muted: #aabaca;
+    --border: #354454; --link: #9ac5ff; --accent: #203553;
+    --add: #183b30; --del: #472731;
+    --flow-ink: #a4ceff; --flow-wash: #1d3149; --flow-rule: #4b739c;
+    --sequence-ink: #d7c3ff; --sequence-wash: #33274c; --sequence-rule: #78639c;
+    --architecture-ink: #abebd9; --architecture-wash: #193a33; --architecture-rule: #4e8d7e;
+  }}
+}}
+* {{ box-sizing: border-box }}
+body {{ margin: 0; background: var(--background); color: var(--text);
+  font: 1rem/1.6 Geist, system-ui, sans-serif }}
+.layout {{ max-width: 92rem; margin: auto; padding: 2rem; display: grid;
+  grid-template-columns: minmax(0, 15rem) minmax(0, 1fr); gap: 2rem }}
+nav {{ position: sticky; top: 2rem; max-height: calc(100vh - 4rem);
+  overflow: auto; align-self: start; padding: .75rem; background: var(--panel);
+  border: 1px solid var(--border); border-radius: .75rem }}
+nav a {{ display: block; padding: .375rem .5rem; overflow-wrap: anywhere;
+  border-radius: .375rem; text-decoration: none; font-size: .875rem }}
+nav a:not(.nav-file) {{ font-weight: 600 }}
+nav .nav-file {{ color: var(--text) }}
+nav .nav-file strong, nav .nav-file small {{ display: block; line-height: 1.35 }}
+nav .nav-file small {{ margin-top: .125rem; font-size: .75rem }}
+a {{ color: var(--link); text-underline-offset: .2em }}
+a:hover {{ background: var(--accent) }}
+a:focus-visible, summary:focus-visible {{ outline: 2px solid var(--link); outline-offset: 2px }}
+main {{ min-width: 0 }}
+header, .panel {{ background: var(--panel); border: 1px solid var(--border);
+  border-radius: .75rem; padding: clamp(1rem, 3vw, 2rem); margin-bottom: 1rem }}
+header {{ border-block-start: .25rem solid var(--link) }}
+h1, h2, h3 {{ line-height: 1.25; text-wrap: balance }}
+h1 {{ font-size: 1.875rem; margin: .25rem 0 .75rem }}
+h2 {{ font-size: 1.25rem; margin: 0 0 .75rem }}
+h3 {{ font-size: 1.125rem }}
+p, li {{ text-wrap: pretty }}
+.meta, small {{ color: var(--muted) }}
+.meta {{ overflow-wrap: anywhere }}
+.facts {{ display: flex; gap: .5rem 1.25rem; flex-wrap: wrap; padding: 0; margin: 1rem 0 0 }}
+.facts li {{ list-style: none; font-weight: 600; padding: .125rem .625rem;
+  border: 1px solid var(--border); border-radius: .375rem; font-variant-numeric: tabular-nums }}
+.overview dl {{ margin: 1rem 0 0; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .375rem 1rem }}
+dt {{ font-weight: 600 }} dd {{ margin: 0; overflow-wrap: anywhere }}
+.report > :first-child {{ margin-top: 0 }}
+blockquote {{ margin: .75rem 0; padding: .5rem 1rem; background: var(--accent);
+  border-inline-start: .25rem solid var(--link) }}
+code, pre, .numbers {{ font-family: ui-monospace, SFMono-Regular, Consolas, monospace }}
+pre {{ margin: 0; overflow: auto; white-space: pre; tab-size: 4 }}
+.report pre, #ledger-raw pre {{ background: var(--background); padding: .75rem }}
+.table {{ overflow: auto }} table {{ width: 100%; border-collapse: collapse }}
+th, td {{ text-align: left; padding: .5rem .75rem; border: 1px solid var(--border) }}
+summary {{ cursor: pointer; font-weight: 600; overflow-wrap: anywhere }}
+.file {{ margin: .75rem 0; border: 1px solid var(--border); border-radius: .5rem }}
+.file summary {{ padding: .75rem; background: var(--background) }}
+.file > p {{ padding-inline: .75rem }}
+.file .meta {{ font-weight: 400; margin-inline-start: .75rem }}
+.hunk {{ scroll-margin-top: 1rem; padding-block: .5rem }}
+.hunk + .hunk {{ border-top: 1px solid var(--border) }}
+.hunk header {{ font: .875rem/1.5 ui-monospace, monospace; margin: 0; border: 0;
+  padding: .375rem .75rem; background: var(--accent); overflow-wrap: anywhere }}
+.hunk pre {{ font-size: .875rem; line-height: 1.5 }}
+.line {{ display: block; min-width: max-content; padding-inline-end: 1rem }}
+.line.add {{ background: var(--add) }} .line.del {{ background: var(--del) }}
+.line {{ scroll-margin-top: 1rem }}
+.omitted {{ padding: .375rem .75rem; color: var(--muted); background: var(--background) }}
+.numbers {{ display: inline-block; min-width: 12ch; padding-inline: .5rem;
+  color: var(--muted); user-select: none }}
+:target {{ outline: 2px solid var(--link); outline-offset: 2px }}
+.flow {{ display: flex; gap: 1rem; flex-wrap: wrap; padding: 0; list-style: none;
+  counter-reset: step }}
+.flow li {{ padding: .5rem .75rem; border-inline-start: .25rem solid var(--link);
+  background: var(--accent); max-width: 22rem; counter-increment: step }}
+.flow li::before {{ content: counter(step) ". "; color: var(--link); font-weight: 600 }}
+.diagram {{ --diagram-ink: var(--flow-ink); --diagram-wash: var(--flow-wash); --diagram-rule: var(--flow-rule);
+  margin: 1rem 0; padding: 1rem; border: 1px solid var(--diagram-rule);
+  border-radius: .75rem; background: var(--diagram-wash) }}
+.diagram.sequence {{ --diagram-ink: var(--sequence-ink); --diagram-wash: var(--sequence-wash);
+  --diagram-rule: var(--sequence-rule) }}
+.diagram.architecture {{ --diagram-ink: var(--architecture-ink); --diagram-wash: var(--architecture-wash);
+  --diagram-rule: var(--architecture-rule) }}
+.diagram figcaption {{ margin-bottom: .875rem; padding-bottom: .5rem;
+  color: var(--diagram-ink); border-bottom: 1px solid var(--diagram-rule); font-weight: 600 }}
+.diagram ol, .diagram ul {{ display: grid; gap: .5rem; margin: 0; padding: 0; list-style: none }}
+.diagram .edge {{ display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) minmax(0, 1fr);
+  gap: .5rem; align-items: center; overflow-wrap: anywhere }}
+.diagram .node {{ background: var(--panel); border: 1px solid var(--diagram-rule);
+  border-radius: .5rem; padding: .375rem .625rem; text-align: center; font-weight: 600 }}
+.diagram .connector {{ color: var(--diagram-ink); text-align: center; font-size: .875rem }}
+.diagram .arrow {{ display: flex; align-items: center; gap: .25rem;
+  line-height: 1; font-size: 1.25rem }}
+.diagram .arrow::before {{ content: ""; flex: 1; border-top: 1px solid currentColor }}
+.sequence ol {{ counter-reset: message }}
+.sequence .edge {{ counter-increment: message }}
+.sequence .connector::before {{ content: counter(message) ". "; font-weight: 600 }}
+.architecture .groups {{ gap: .75rem }}
+.architecture .group {{ border: 1px solid var(--diagram-rule); background: var(--panel);
+  border-radius: .5rem; padding: .75rem }}
+.architecture h3 {{ margin: 0 0 .5rem; color: var(--diagram-ink) }}
+.architecture .edge {{ grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) }}
+@media (max-width: 48rem) {{
+  .layout {{ display: block; padding: .75rem }}
+  nav {{ position: static; max-height: 10rem; margin-bottom: .75rem; border: 1px solid var(--border) }}
+}}
+</style></head>
+<body><div class="layout">
+<nav aria-label="报告导航">{nav}</nav>
+<main>
+<header class="overview"><div class="meta">{scope}</div><h1>{title}</h1>{facts}{overview}</header>
+{report}
+{evidence}
+<details class="panel" id="ledger-raw"><summary>台账原文</summary><pre>{ledger}</pre></details>
+</main></div>
 <script>
-const D=JSON.parse(document.getElementById('data').textContent);
-function load(srcs){{return new Promise((ok,no)=>{{let i=0;const nx=()=>{{if(i>=srcs.length)return no();const s=document.createElement('script');s.src=srcs[i++];s.onload=ok;s.onerror=nx;document.head.appendChild(s)}};nx()}})}}
-const esc=t=>t.replace(/[&<>]/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;'}}[c]));
-(async()=>{{
- const m=document.getElementById('m');
- let md=null;
- try{{await load(['https://cdn.jsdelivr.net/npm/marked@12/marked.min.js','https://unpkg.com/marked@12/marked.min.js','https://registry.npmmirror.com/marked/12.0.2/files/marked.min.js']);md=window.marked}}catch(e){{}}
- for(const s of D){{const sec=document.createElement('section');sec.id=s.id;
-   sec.innerHTML=md?md.parse(s.md,{{breaks:true,gfm:true}}):'<pre>'+esc(s.md)+'</pre>';m.appendChild(sec)}}
- document.querySelectorAll('code.language-diff').forEach(c=>{{c.innerHTML=c.innerHTML.split('\n').map(l=>l[0]==='+'?'<span class="add">'+l+'</span>':l[0]==='-'?'<span class="del">'+l+'</span>':l).join('\n')}});
- document.querySelectorAll('code.language-mermaid').forEach(c=>{{const d=document.createElement('div');d.className='mermaid';d.textContent=c.textContent;c.parentElement.replaceWith(d)}});
- try{{await load(['https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js','https://unpkg.com/mermaid@10/dist/mermaid.min.js','https://registry.npmmirror.com/mermaid/10.9.1/files/dist/mermaid.min.js']);
-   mermaid.initialize({{startOnLoad:false,theme:matchMedia('(prefers-color-scheme: dark)').matches?'dark':'default'}});await mermaid.run()}}catch(e){{}}
-}})();
-</script></body></html>"""
+function reveal() {{
+  const target = document.getElementById(location.hash.slice(1));
+  if (!target) return;
+  const details = target.closest('details');
+  if (details) details.open = true;
+  target.scrollIntoView();
+}}
+window.addEventListener('hashchange', reveal);
+document.addEventListener('click', event => {{
+  const link = event.target.closest('a');
+  if (link && link.hash && link.hash === location.hash) reveal();
+}});
+reveal();
+</script>
+</body></html>
+"""
+
+
+def diff_rows(hunk):
+    old, new = hunk["old_start"], hunk["new_start"]
+    for text in hunk["body"]:
+        kind = {"-": "del", "+": "add"}.get(text[:1], "")
+        if text.startswith("\\"):
+            yield "", None, None, text
+            continue
+        old_line = old if kind != "add" else None
+        new_line = new if kind != "del" else None
+        yield kind, old_line, new_line, text
+        old += old_line is not None
+        new += new_line is not None
+
+
+def report_references(report):
+    references = {}
+    for path, line in re.findall(r"`([^`\n]+?):(\d+)(?:-\d+)?`", report):
+        references.setdefault(path, set()).add(int(line))
+    return references
+
+
+def patch_excerpt(hunk, references, limit=40):
+    rows = list(diff_rows(hunk))
+    if len(rows) <= limit:
+        return list(enumerate(rows, 1))
+    matches = [i for i, (_, old, new, _) in enumerate(rows) if old in references or new in references]
+    selected = set(matches[:limit])
+    # 先保留引用及左右文，再补片段起始处。
+    for indexes in ([i + distance for i in matches for distance in (-1, 1, -2, 2)], range(limit)):
+        for i in indexes:
+            if len(selected) == limit:
+                break
+            if 0 <= i < len(rows):
+                selected.add(i)
+    return [(i + 1, rows[i]) for i in sorted(selected)]
+
+
+def render_evidence(files, skipped, references):
+    nav, panels, locations = [], [], {}
+    for i, (path, diff) in enumerate(sorted(files.items()), 1):
+        file_id = "file-%d" % i
+        label = escape(path)
+        folder, _, name = path.rpartition("/")
+        directory = f"<small>{escape(folder)}</small>" if folder else ""
+        nav.append(f'<a class="nav-file" href="#{file_id}" aria-label="{label}">'
+                   f'<strong>{escape(name)}</strong>{directory}</a>')
+        locations[path] = (file_id, {})
+        counts = "二进制文件" if diff["binary"] else "+%d / −%d" % (diff["add"], diff["del"])
+        if path in skipped:
+            panels.append(f'<details class="file" id="{file_id}"><summary><code>{label}</code>'
+                          f'<span class="meta">{counts}</span></summary><p>已略去补丁，仅保留文件统计。</p></details>')
+            continue
+        cited = references.get(path, set())
+        indexed = list(enumerate(diff["hunks"], 1))
+        def has_reference(item):
+            hunk = item[1]
+            return any(hunk[side + "_start"] <= line < hunk[side + "_start"] + hunk[side + "_len"]
+                       for line in cited for side in ("new", "old"))
+        selected = sorted(sorted(indexed, key=lambda item: not has_reference(item))[:6], key=lambda item: item[0])
+        hunks = []
+        for j, hunk in selected:
+            hunk_id = "%s-hunk-%d" % (file_id, j)
+            rows = []
+            preceding = 0
+            for n, (kind, old, new, text) in patch_excerpt(hunk, cited):
+                if n > preceding + 1:
+                    rows.append(f'<span class="line omitted">省略 {n - preceding - 1} 行</span>')
+                preceding = n
+                row_id = "%s-line-%d" % (hunk_id, n)
+                if old is not None:
+                    locations[path][1].setdefault(old, []).append((False, j, row_id))
+                if new is not None:
+                    locations[path][1].setdefault(new, []).append((True, j, row_id))
+                numbers = "%s %s" % (str(old or "").rjust(5), str(new or "").rjust(5))
+                tail = '<span class="meta"> …（该行已截断）</span>' if len(text) > 600 else ""
+                rows.append(f'<span class="line {kind}" id="{row_id}"><span class="numbers">{numbers}</span>{escape(text[:600])}{tail}</span>')
+            if preceding < len(hunk["body"]):
+                rows.append(f'<span class="line omitted">省略后续 {len(hunk["body"]) - preceding} 行</span>')
+            body = "".join(rows)
+            header = escape(hunk["revision"] + "  " + hunk["header"])
+            hunks.append(f'<section class="hunk" id="{hunk_id}"><header>{header}</header><pre aria-label="旧行、新行和补丁">{body}</pre></section>')
+        body = "".join(hunks) or "<p>无文本补丁。</p>"
+        if len(selected) < len(indexed):
+            body += f'<p class="meta">另有 {len(indexed) - len(selected)} 个补丁片段，完整差异可在 Git 中查看。</p>'
+        panels.append(f'<details class="file" id="{file_id}"><summary><code>{label}</code>'
+                      f'<span class="meta">{counts}</span></summary>{body}</details>')
+    return "".join(nav), "".join(panels), locations
+
+
+def report_inline(text, locations):
+    parts = re.split(r'(`[^`\n]+`|\*\*[^*\n]+\*\*)', text)
+    for i, part in enumerate(parts):
+        if part.startswith("`") and part.endswith("`") and len(part) > 1:
+            value = part[1:-1]
+            code = "<code>" + escape(value) + "</code>"
+            match = re.fullmatch(r"(.+?):(\d+)(?:-\d+)?", value)
+            path = match[1] if match else value
+            if path in locations:
+                file_id, lines = locations[path]
+                candidates = lines.get(int(match[2]), []) if match else []
+                # 选择新侧行号优先，历史有重叠时定位到最后一轮。
+                target = max(candidates)[2] if candidates else file_id
+                code = f'<a href="#{target}">{code}</a>'
+            parts[i] = code
+        elif part.startswith("**") and part.endswith("**") and len(part) > 4:
+            parts[i] = "<strong>" + escape(part[2:-2]) + "</strong>"
+        else:
+            parts[i] = escape(part)
+    return "".join(parts)
+
+
+def render_diagram(kind, source, inline):
+    lines = [line.strip() for line in source.splitlines() if line.strip()]
+    if kind == "flow" and not any(" -> " in line for line in lines):
+        return '<ol class="flow">' + "".join("<li>" + inline(line) + "</li>" for line in lines) + "</ol>"
+    edges = []
+    for line in lines:
+        relation, _, label = line.partition(" | ")
+        origin, arrow, target = relation.partition(" -> ")
+        if not arrow or not origin.strip() or not target.strip():
+            return "<pre><code>" + escape(source) + "</code></pre>"
+        edges.append((origin.strip(), target.strip(), label.strip()))
+    if not edges:
+        return ""
+
+    def edge(origin, target, label):
+        start = '<span class="node">' + inline(origin) + '</span>' if origin else ""
+        direction = '<span class="connector">' + inline(label) + '<span class="arrow" aria-label="指向">→</span></span>'
+        return '<li class="edge">' + start + direction + '<span class="node">' + inline(target) + '</span></li>'
+
+    if kind == "architecture":
+        groups = {}
+        for origin, target, label in edges:
+            groups.setdefault(origin, []).append(edge("", target, label))
+        body = '<ul class="groups">' + "".join(
+            '<li class="group"><h3>' + inline(origin) + '</h3><ul>' + "".join(items) + '</ul></li>'
+            for origin, items in groups.items()) + '</ul>'
+    else:
+        tag = "ol" if kind == "sequence" else "ul"
+        body = '<' + tag + '>' + "".join(edge(*item) for item in edges) + '</' + tag + '>'
+    caption = {"flow": "流程图", "sequence": "交互图", "architecture": "架构图"}[kind]
+    variant = "flowchart" if kind == "flow" else kind
+    return f'<figure class="diagram {variant}"><figcaption>{caption}</figcaption>{body}</figure>'
+
+
+def render_report(report, locations):
+    """渲染报告使用的 Markdown 子集，原始 HTML 一律作为文本。"""
+    def inline(text):
+        return report_inline(text, locations)
+
+    blocks = []
+    for i, part in enumerate(re.split(r"(?m)^```([^\n]*)\n(.*?)^```[ \t]*$", report, flags=re.S), 0):
+        if i % 3 == 1:
+            language = part.strip()
+        elif i % 3 == 2:
+            if language in ("flow", "sequence", "architecture"):
+                blocks.append(render_diagram(language, part, inline))
+            elif language == "mermaid":
+                blocks.append("<details><summary>Mermaid 流程源文本</summary><pre>" + escape(part) + "</pre></details>")
+            elif language == "diff":
+                rows = []
+                for line in part.splitlines():
+                    kind = {"+": "add", "-": "del"}.get(line[:1], "")
+                    rows.append(f'<span class="line {kind}">{escape(line)}</span>')
+                blocks.append("<pre><code>" + "".join(rows) + "</code></pre>")
+            else:
+                blocks.append("<pre><code>" + escape(part) + "</code></pre>")
+        else:
+            for paragraph in re.split(r"\n[ \t]*\n", part.strip()):
+                lines = paragraph.splitlines()
+                if not lines:
+                    continue
+                heading = re.match(r"^#{1,6} (.+)$", lines[0])
+                if heading:
+                    blocks.append("<h2>" + inline(heading[1]) + "</h2>")
+                    lines = lines[1:]
+                if not lines:
+                    continue
+                if all(line.startswith(">") for line in lines):
+                    blocks.append("<blockquote>" + "<br>".join(inline(line[1:].strip()) for line in lines) + "</blockquote>")
+                elif all(re.match(r"^(?:[-*]|\d+\.) ", line) for line in lines):
+                    tag = "ol" if lines[0][0].isdigit() else "ul"
+                    items = "".join("<li>" + inline(line.split(" ", 1)[1]) + "</li>" for line in lines)
+                    blocks.append("<" + tag + ">" + items + "</" + tag + ">")
+                elif len(lines) > 1 and all(line.startswith("|") for line in lines) and re.fullmatch(r"[|:\- ]+", lines[1]):
+                    table = []
+                    for n, line in enumerate(lines[:1] + lines[2:]):
+                        tag = "th" if n == 0 else "td"
+                        cells = "".join(f"<{tag}>{inline(cell.strip())}</{tag}>" for cell in line.strip("|").split("|"))
+                        table.append("<tr>" + cells + "</tr>")
+                    blocks.append('<div class="table"><table>' + "".join(table) + "</table></div>")
+                else:
+                    blocks.append("<p>" + "<br>".join(inline(line) for line in lines) + "</p>")
+    return "\n".join(blocks)
+
+
+def review_page(title, branch, report, ledger, analysis):
+    files = analysis["evidence"] if analysis else {}
+    skipped = set(analysis["skipped"]) if analysis else set()
+    nav, panels, locations = render_evidence(files, skipped, report_references(report))
+    facts = overview = ""
+    scope = branch
+    if analysis:
+        scope += " · " + analysis["range"]
+        added = sum(file_diff["add"] for file_diff in files.values())
+        deleted = sum(file_diff["del"] for file_diff in files.values())
+        facts = '<ul class="facts"><li>L%d</li><li>%d 个文件</li><li>+%d / −%d</li></ul>' % (
+            analysis["level"], len(files), added, deleted)
+        if len(analysis["entries"]) == 1:
+            fields = analysis["entries"][0]["fields"]
+            values = [f"<dt>{key}</dt><dd>{escape(fields[key])}</dd>" for key in ("意图", "验证") if fields.get(key)]
+            if values:
+                overview = "<dl>" + "".join(values) + "</dl>"
+    if report:
+        nav = '<a href="#report">审阅结论</a>' + nav
+        report = '<section class="panel report" id="report">' + render_report(report, locations) + "</section>"
+    evidence = ""
+    if analysis:
+        nav += '<a href="#evidence">全部代码证据</a>'
+        evidence = '<section class="panel" id="evidence"><h2>代码证据</h2>' + (
+            panels or "<p>这个范围没有文件差异。</p>") + "</section>"
+    nav += '<a href="#ledger-raw">台账原文</a>'
+    return VIEW_HTML.format(title=escape(title), scope=escape(scope), facts=facts, overview=overview,
+                            nav=nav, report=report, evidence=evidence, ledger=escape(ledger))
 
 
 def cmd_view(a):
-    """把报告 Markdown（从 stdin 读）渲染成 .light-work/<分支>.html，流程图会渲染成图；页面末尾附原始台账。
-    不落中间文件：/lw-review 每次生成都覆盖这一页。"""
+    """生成可离线阅读的 HTML，指定审阅范围时内嵌 Git diff。"""
     root = repo_root()
     br = current_branch()
     lp = ledger_path(root, br)
     if not os.path.exists(lp):
         die("当前分支还没有台账")
-    report = ""
-    if not sys.stdin.isatty():
-        report = sys.stdin.read().strip()
-    secs, nav = [], []
-    if report:
-        secs.append({"id": "report", "md": report})
-        nav.append('<a href="#report"><span class="l">%s</span></a>' % (a.title or "报告").replace("<", "&lt;"))
-    secs.append({"id": "ledger-raw", "md": open(lp, encoding="utf-8").read()})
-    nav.append('<a href="#ledger-raw"><span class="l">台账原文</span></a>')
+    report = "" if sys.stdin.isatty() else sys.stdin.read().strip()
+    analysis = None
+    if a.scope or a.base:
+        mode, ref = pick_mode(a, "entry")
+        analysis = analyze(root, load_cfg(root), mode, ref, 0, a.current_entry, evidence=True)
     out = page_path(root, br)
-    data = json.dumps(secs, ensure_ascii=False).replace("</", "<\\/")
-    html = VIEW_HTML.format(title=(a.title or "Review") + " · " + br, branch=br.replace("<", "&lt;"),
-                            generated=_dt.datetime.now().strftime("%m-%d %H:%M"), nav="".join(nav), data=data)
-    open(out, "w", encoding="utf-8").write(html)
+    with open(lp, encoding="utf-8") as ledger:
+        page = review_page(a.title or "改动审阅", br, report, ledger.read(), analysis)
+    with open(out, "w", encoding="utf-8") as output:
+        output.write(page)
     print("✓ %s" % os.path.relpath(out, root))
     if a.open:
         opener = "open" if sys.platform == "darwin" else ("start" if os.name == "nt" else "xdg-open")
@@ -1703,6 +2060,10 @@ def main():
     sp.add_parser("stats").set_defaults(fn=cmd_stats)
     p = sp.add_parser("view"); p.add_argument("--open", action="store_true")
     p.add_argument("--title", help="页面标题，如：分支汇总 / C-004 review"); p.set_defaults(fn=cmd_view)
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--scope", type=parse_view_scope, metavar="SCOPE", help="报告的审阅范围：latest、C-xxx、all 或 branch")
+    g.add_argument("--base", help="本轮编辑前的起点")
+    p.add_argument("--current-entry", help="与 --base 一起标记本轮条目")
     p = sp.add_parser("hook"); p.add_argument("event", choices=["session-start", "prompt", "pre-edit", "post-edit", "stop"])
     p.set_defaults(fn=cmd_hook)
     a = ap.parse_args()

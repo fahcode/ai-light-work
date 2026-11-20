@@ -165,6 +165,11 @@ for command in review check; do
   python3 -c 'import json, sys; d = json.loads(sys.argv[1]); assert d["range"] == "C-003 的本轮改动" and d["eff_files"] == ["src/search/voice.ts"] and [e["id"] for e in d["entries"]] == ["C-003"]' "$out" &&
     ok "$command 内部调用只看本轮差异和条目" || fail "$command 内部调用混入其他改动" "$out"
 done
+$L view --base "$round_base" --current-entry C-003 --title "本轮审阅" </dev/null >/dev/null
+page=$(cat .light-work/feature-voice.html)
+expect "本轮报告注明条目和范围" "$page" "C-003 的本轮改动"
+expect "本轮报告保留 Git diff" "$page" 'reason: &quot;fail&quot;'
+grep -qF 'src/unrelated.ts' <<<"$page" && fail "本轮报告混入先前改动" "" || ok "本轮报告只包含本轮证据"
 $L checkpoint --entry C-003 --base "$round_base" >/dev/null
 git rev-list --objects refs/light-work/cp/feature-voice > "$TMP/checkpoint-objects"
 grep -q "^$round_base " "$TMP/checkpoint-objects" && ok "收尾点保留本轮起点 tree" || fail "收尾点未引用起点 tree" ""
@@ -217,6 +222,67 @@ expect "why：带出意图" "$out" "意图:"
 out=$($L why src/ui/page.ts:2); expect "why：基准分支上的代码" "$out" "基准分支上就有的代码"
 out=$(printf '# 台账改动报告\n> 两次改动\n' | $L view --title "台账改动报告"); expect "从 stdin 生成页面" "$out" ".light-work/feature-voice.html"
 grep -q "台账改动报告" .light-work/feature-voice.html && ok "页面包含报告内容" || fail "页面内容" ""
+cat <<'LW_REPORT' | $L view --scope C-002 --title '审阅 <范围>' >/dev/null
+## 关键改动
+
+- 核对 `src/search/voice.ts:3` 的空字符串处理
+- <script>alert('raw')</script>
+
+```flow
+查看输入
+检查返回结果
+```
+
+```flow
+检查输入 -> 空结果 | 为空
+检查输入 -> 加载详情 | 有效
+```
+
+```sequence
+页面 -> 搜索服务 | 查询
+搜索服务 -> 页面 | 返回 `src/search/voice.ts:3`
+```
+
+```architecture
+搜索页 -> 搜索服务 | 查询
+搜索服务 -> 缓存 | 读取
+搜索服务 -> API | 请求
+```
+LW_REPORT
+page=$(cat .light-work/feature-voice.html)
+expect "指定条目报告显示范围" "$page" 'C-002 的 1 轮修改'
+expect "路径行号链接到真实补丁行" "$page" 'href="#file-1-hunk-1-line-3"><code>src/search/voice.ts:3</code>'
+expect "跳转目标存在" "$page" 'id="file-1-hunk-1-line-3"'
+expect "离线步骤图" "$page" '<ol class="flow">'
+expect "离线分支流程图" "$page" '<figure class="diagram flowchart">'
+expect "离线交互图" "$page" '<figure class="diagram sequence">'
+expect "离线架构图" "$page" '<figure class="diagram architecture">'
+expect "台账原文默认折叠" "$page" '<details class="panel" id="ledger-raw">'
+expect "标题和正文中的 HTML 被转义" "$page" '&lt;script&gt;alert'
+grep -q '<script src=' <<<"$page" && fail "报告依赖远程脚本" "" || ok "报告无需加载远程脚本"
+mkdir -p "src/显示"
+printf 'let value = 1;\n' > "src/显示/中文 文件.ts"
+printf 'const quotedFile = 1;\n' > 'src/显示/带"引号.ts'
+mkdir -p dist
+python3 - <<'PY'
+from pathlib import Path
+Path("dist/bundle.js").write_text("generatedOnly = true;\n" * 10000)
+Path("src/long.ts").write_text("".join(f"const evidence{i:03d} = {i};\n" for i in range(1, 101)))
+PY
+printf '%s\n' '核对 `src/long.ts:90` 和 `src/显示/带"引号.ts:1`。' | $L view --scope branch >/dev/null
+page=$(cat .light-work/feature-voice.html)
+expect "全分支报告导航显示 Unicode 文件" "$page" 'src/显示/中文 文件.ts'
+expect "带空格的 Unicode 文件有真实补丁" "$page" '+let value = 1;'
+expect "带引号的文件有真实补丁" "$page" '+const quotedFile = 1;'
+expect "被引用的后段保留准确的行锚点" "$page" '-line-90"><code>src/long.ts:90</code>'
+expect "长补丁标明省略内容" "$page" '省略后续'
+expect "生成产物保留增删统计" "$page" '+10000 / −0'
+grep -qF 'generatedOnly' <<<"$page" && fail "报告嵌入生成产物正文" "" || ok "生成产物仅保留统计"
+$L view --scope all </dev/null >/dev/null
+page=$(cat .light-work/feature-voice.html)
+expect "全部台账报告保留各轮差异" "$page" '全部台账改动（2 条，2 轮）'
+grep -qF 'src/显示/中文 文件.ts' <<<"$page" && fail "全部台账报告混入未登记文件" "" || ok "全部台账报告排除未登记文件"
+rm "src/显示/中文 文件.ts" 'src/显示/带"引号.ts' "src/long.ts" "dist/bundle.js"
 [ "$(find .light-work -type d | wc -l | tr -d ' ')" = "1" ] && ok ".light-work 下没有子目录" || fail "出现子目录" "$(find .light-work)"
 git status --porcelain | grep -q ".light-work" && fail ".light-work 不应出现在 git status" "$(git status --porcelain)" || ok ".light-work 已被本地 exclude"
 
