@@ -11,7 +11,7 @@
   next-id [--baseline]         下一个条目编号
   score [范围] [--hunks N]     复杂度 L0-L3 + 依据 + 影响面 + 真实 diff 片段（默认：上次收尾点..工作区）
   checkpoint --entry C-xxx     收尾：记录本轮改动归属哪个条目
-  ask                          冲突闸门：向用户确认前调用，本轮不拦截收尾
+  ask                          冲突闸门：向用户确认前调用，本轮跳过收尾提醒
   check [范围]                 回归核对清单（默认：台账范围）
   conflicts                    条目之间的重叠、回退、反复修改
   why 文件:行 [...]             这一行是哪条台账改动引入的：意图、约束、根因、后来有没有被推翻
@@ -716,8 +716,6 @@ def init_ledger(root, cfg, quiet=False, hook=True):
 
 def cmd_init(a):
     root = repo_root()
-    if current_branch() == detect_base() and not a.force:
-        die("当前在基准分支 %s 上，不记台账" % detect_base())
     init_ledger(root, load_cfg(root))
 
 
@@ -729,9 +727,6 @@ def cmd_context(a):
     lp = ledger_path(root, br)
     print("当前分支状态（每次从台账实时生成，相当于一份不会过期的 handoff）")
     print("分支: %s  基准: %s  台账: %s" % (br, base, os.path.relpath(lp, root)))
-    if br == base:
-        print("当前在基准分支，不记账。")
-        return
     if not os.path.exists(lp):
         print("还没有台账（开新会话时插件会自动创建）。")
         return
@@ -909,7 +904,7 @@ def state_load(root):
     try:
         return json.load(open(state_path(root), encoding="utf-8"))
     except Exception:
-        return {"dirty": False, "edited": [], "ctx_shown": {}, "nag_tree": None, "nags": 0}
+        return {"dirty": False, "ctx_shown": {}}
 
 
 def state_save(root, st):
@@ -918,7 +913,7 @@ def state_save(root, st):
 
 def state_clear(root):
     st = state_load(root)
-    st.update({"dirty": False, "edited": [], "nag_tree": None, "nags": 0, "awaiting": False})
+    st.update({"dirty": False, "nag_tree": None, "awaiting": False})
     state_save(root, st)
 
 
@@ -1202,7 +1197,7 @@ def cmd_conflicts(a):
 # ───────────────────────── hooks（插件自动化）─────────────────────────
 
 WORKFLOW = """[ai-light-work] 当前分支 {branch} 的变更台账：{ledger}。LW = python3 ~/.light-work/lw.py
-用户消息要求修改代码（修 bug / 需求变更 / 调整行为）时，按顺序自动执行，用户不需要提醒：
+结合上下文确认用户要求动手修改代码（修 bug / 需求变更 / 调整行为）后，按顺序自动执行：
   1. lw-record  先把这次意图记成 open 条目（同一意图的续改就更新原条目；推翻已有约束先问用户）
   2. lw-edit    bug 先找根因；按"手术刀"原则改代码；改动明显和台账约束冲突而用户没提时，先用一句话请用户选
   3. lw-review  定稿条目 → 按约束自检 → 输出 L0-L3 review 卡片 → checkpoint --entry
@@ -1267,18 +1262,13 @@ def install_shim():
         note_error("复制 ~/.light-work/lw.py", e)
 
 
-def ledger_branch_ctx():
-    """在记账分支上返回 (root, cfg, ledger_path)，否则 None。"""
-    if not git_ok("rev-parse", "--show-toplevel"):
-        return None
-    root = git("rev-parse", "--show-toplevel").strip()
+def ledger_branch_ctx(root):
+    """返回当前 Git 工作区的台账上下文。"""
     cfg = load_cfg(root)
-    if current_branch() == detect_base(cfg) or current_branch().startswith("detached-"):
-        return None
     lp = ledger_path(root)
     if not os.path.exists(lp):  # 会话中途切了分支：当场给新分支建台账，用户无感
         lp, _ = init_ledger(root, cfg, quiet=True)
-    return root, cfg, lp
+    return cfg, lp
 
 
 def capture(fn, *args):
@@ -1335,54 +1325,9 @@ def edited_paths(root, data):
     return out
 
 
-def last_assistant_text(data):
-    """AI 这一轮最后说的话。Codex 直接给 last_assistant_message；Claude Code 从会话记录（JSONL）末尾找。"""
-    t = data.get("last_assistant_message")
-    if isinstance(t, str) and t.strip():
-        return t
-    tp = data.get("transcript_path")
-    if not tp or not os.path.exists(tp):
-        return ""
-    try:
-        with open(tp, "rb") as fh:
-            fh.seek(0, 2)
-            fh.seek(max(0, fh.tell() - 300000))
-            lines = fh.read().decode("utf-8", "replace").splitlines()
-    except Exception:
-        return ""
-    for ln in reversed(lines):
-        try:
-            o = json.loads(ln)
-        except Exception:
-            continue
-        if not isinstance(o, dict) or o.get("type") != "assistant":
-            continue
-        c = (o.get("message") or {}).get("content")
-        if isinstance(c, str):
-            txt = c
-        elif isinstance(c, list):
-            txt = "\n".join(x.get("text", "") for x in c if isinstance(x, dict) and x.get("type") == "text")
-        else:
-            txt = ""
-        if txt.strip():
-            return txt
-    return ""
-
-
-ASK_TAIL_RE = re.compile(r"[?？][\s*_`)）」』\"']*$")
-
-
-def looks_waiting(text):
-    """最后一句是在问用户（以问号结尾）：AI 还没做完，在等回答。"""
-    return bool(text) and bool(ASK_TAIL_RE.search(text.strip()[-300:]))
-
-
-def hook_session_start(data):
+def hook_session_start(root, data):
     install_shim()
-    ctx = ledger_branch_ctx()
-    if not ctx:
-        return
-    root, cfg, lp = ctx
+    cfg, lp = ledger_branch_ctx(root)
     lp, created = init_ledger(root, cfg, quiet=True)
     text = WORKFLOW.format(branch=current_branch(), ledger=os.path.relpath(lp, root))
     ns = argparse.Namespace(files=None, limit=12)
@@ -1390,11 +1335,8 @@ def hook_session_start(data):
     emit("SessionStart", text + "\n\n" + body[:3500])
 
 
-def hook_prompt(data):
-    ctx = ledger_branch_ctx()
-    if not ctx:
-        return
-    root, cfg, lp = ctx
+def hook_prompt(root, data):
+    _, lp = ledger_branch_ctx(root)
     st = state_load(root)
     if st.get("awaiting"):  # 用户回复了冲突确认，恢复正常的收尾检查
         st["awaiting"] = False
@@ -1410,16 +1352,14 @@ def hook_prompt(data):
         parts.append("⚠ %s 已经改到第 %d 轮：如果这次还是在修同一个问题，先停下来重新找根因（多半是修错了地方），"
                      "不要继续叠补丁，并在卡片里告诉用户换了方向。" % (stuck[-1]["id"], stuck[-1]["rounds"]))
     if CHANGE_INTENT.search(data.get("prompt", "") or ""):
-        parts.append("这条消息像是要改代码 → 先 lw-record（续改同一意图就更新上面的 open 条目），再 lw-edit，最后 lw-review。")
+        parts.append("请结合上下文判断用户是否要求动手修改代码。纯提问、分析或解释就直接回答，不记条目。"
+                     "确认需要动手时，先 lw-record（同一意图续改就更新原条目），再 lw-edit，最后 lw-review。")
     if parts:
         emit("UserPromptSubmit", "[ai-light-work] " + " ".join(parts))
 
 
-def hook_pre_edit(data):
-    ctx = ledger_branch_ctx()
-    if not ctx:
-        return
-    root, cfg, lp = ctx
+def hook_pre_edit(root, data):
+    _, lp = ledger_branch_ctx(root)
     files = edited_paths(root, data)
     if not files:
         return
@@ -1451,29 +1391,20 @@ def hook_pre_edit(data):
         emit("PreToolUse", "[ai-light-work] " + "\n".join(msgs))
 
 
-def hook_post_edit(data):
-    ctx = ledger_branch_ctx()
-    if not ctx:
-        return
-    root = ctx[0]
+def hook_post_edit(root, data):
+    ledger_branch_ctx(root)
     files = edited_paths(root, data)
     if not files:
         return
     st = state_load(root)
     st["dirty"] = True
-    for f in files:
-        if f not in st.setdefault("edited", []):
-            st["edited"].append(f)
     state_save(root, st)
 
 
-def hook_stop(data):
+def hook_stop(root, data):
     if data.get("stop_hook_active"):
         return
-    ctx = ledger_branch_ctx()
-    if not ctx:
-        return
-    root, cfg, lp = ctx
+    cfg, _ = ledger_branch_ctx(root)
     st = state_load(root)
     if not st.get("dirty") or st.get("awaiting"):  # 没改代码，或正在等用户回答冲突确认
         return
@@ -1482,22 +1413,11 @@ def hook_stop(data):
     if git("rev-parse", base + "^{tree}").strip() == cur:
         state_clear(root)
         return
-    if st.get("defer_tree") != cur and looks_waiting(last_assistant_text(data)):
-        # AI 最后一句在问用户：还没做完，这次先不拦。同一份改动只放过一次，改动状态保留，下一轮照样会要卡片
-        st["defer_tree"] = cur
-        state_save(root, st)
+    if st.get("nag_tree") == cur:
         return
-    if st.get("nag_tree") == cur and st.get("nags", 0) >= 2:
-        return  # 同一份改动已经提醒过两次，不再拦
-    st["nags"] = st.get("nags", 0) + 1 if st.get("nag_tree") == cur else 1
     st["nag_tree"] = cur
     state_save(root, st)
-    files = st.get("edited", [])
-    reason = ("[ai-light-work] 本轮改了 %d 个文件（%s）但还没有收尾。按 lw-review 执行："
-              "定稿 open 条目 → score 并逐条自检约束 → 输出 review 卡片 → checkpoint --entry <ID>。"
-              "如果这些改动确实不需要记账（临时调试且已还原），运行 `python3 ~/.light-work/lw.py checkpoint` 跳过。"
-              % (len(files), ", ".join(files[:5])))
-    print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
+    emit("Stop", extra={"systemMessage": "[ai-light-work] 改动尚未收尾，需要时可以让助手补做 lw-review。"})
 
 
 def cmd_why(a):
@@ -1570,7 +1490,7 @@ def cmd_why(a):
 
 
 def cmd_ask(a):
-    """lw-edit 冲突闸门：提问前调用，这一轮结束时不拦截；用户下一条消息到来时自动解除。"""
+    """lw-edit 冲突闸门：提问前调用，这一轮结束时跳过收尾提醒；用户下一条消息到来时自动解除。"""
     root = repo_root()
     st = state_load(root)
     st["awaiting"] = True
@@ -1585,15 +1505,18 @@ def cmd_hook(a):
     except Exception:
         data = {}
     ev = {"session-start": "SessionStart", "prompt": "UserPromptSubmit"}.get(a.event)
-    if ev:  # 只有这两个事件能把话带给 AI
-        err = take_error()
-        if err:
-            PENDING_ERR.append(err)
     try:
         if data.get("cwd") and os.path.isdir(data["cwd"]):
             os.chdir(data["cwd"])
+        root = git("rev-parse", "--show-toplevel", check=False).strip()
+        if not root:
+            return
+        if ev:
+            err = take_error()
+            if err:
+                PENDING_ERR.append(err)
         {"session-start": hook_session_start, "prompt": hook_prompt, "pre-edit": hook_pre_edit,
-         "post-edit": hook_post_edit, "stop": hook_stop}[a.event](data)
+         "post-edit": hook_post_edit, "stop": hook_stop}[a.event](root, data)
     except SystemExit:
         pass
     except Exception as e:  # 钩子永远不能把会话弄坏：不报错退出，记下来下次告诉用户
@@ -1676,7 +1599,7 @@ def cmd_view(a):
 def main():
     ap = argparse.ArgumentParser(prog="lw.py", description="ai-light-work 按分支变更台账")
     sp = ap.add_subparsers(dest="cmd")
-    p = sp.add_parser("init"); p.add_argument("--force", action="store_true", help="在基准分支上也建（一般不需要，钩子会自动建）")
+    p = sp.add_parser("init"); p.add_argument("--force", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(fn=cmd_init)
     p = sp.add_parser("context"); p.add_argument("--files", nargs="*"); p.add_argument("--limit", type=int, default=30)
     p.set_defaults(fn=cmd_context)

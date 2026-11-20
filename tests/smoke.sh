@@ -37,7 +37,19 @@ cat > src/ui/page.ts <<'EOF'
 import { handleResult } from "../search/voice";
 export function onVoice(res) { return handleResult(res); }
 EOF
-git add -A && git commit -qm init && git checkout -qb feature/voice
+git add -A && git commit -qm init
+
+echo "钩子：Git 工作区判断"
+out=$(hook session-start "{\"cwd\":\"$TMP\"}")
+[ -z "$out" ] && [ ! -e "$HOME/.light-work/lw.py" ] && ok "非 Git 目录跳过初始化" || fail "非 Git 目录触发" "$out"
+out=$(hook session-start "{\"cwd\":\"$REPO\"}")
+expect "基准分支读取台账摘要" "$out" "## 有效约束"
+[ -f .light-work/main.md ] && ok "基准分支自动建台账" || fail "缺少基准分支台账" ""
+out=$($L init); expect "基准分支可直接运行 init" "$out" ".light-work/main.md"
+git checkout -q --detach
+out=$(hook session-start "{\"cwd\":\"$REPO\"}")
+expect "detached HEAD 按当前提交记账" "$out" ".light-work/detached-$(git rev-parse --short HEAD).md"
+git checkout -qb feature/voice
 
 echo "钩子：会话开始"
 out=$(hook session-start "{\"cwd\":\"$REPO\"}")
@@ -48,7 +60,11 @@ git rev-parse -q --verify refs/light-work/start/feature-voice >/dev/null && ok "
 
 echo "钩子：用户消息 / 编辑前"
 out=$(hook prompt "{\"cwd\":\"$REPO\",\"prompt\":\"空字符串也别当成功，改一下\"}")
-expect "识别改代码意图" "$out" "先 lw-record"
+expect "确认需要动手才走记录流程" "$out" "确认需要动手时，先 lw-record"
+ledger_before=$(git hash-object .light-work/feature-voice.md)
+out=$(hook prompt "{\"cwd\":\"$REPO\",\"prompt\":\"为什么要这样改？先分析一下\"}")
+expect "提问命中关键词时提示 AI 自行判断" "$out" "纯提问、分析或解释就直接回答，不记条目"
+[ "$(git hash-object .light-work/feature-voice.md)" = "$ledger_before" ] && ok "提示本身不写条目" || fail "提问改变台账" "$out"
 EDIT="{\"cwd\":\"$REPO\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$REPO/src/search/voice.ts\"}}"
 out=$(hook pre-edit "$EDIT")
 expect "没有 open 条目时提醒" "$out" "还没有 open 条目"
@@ -95,13 +111,15 @@ s = s.replace('  return { ok: true, data: res };',
 open(p, "w").write(s)
 EOF
 hook post-edit "$EDIT" >/dev/null
-out=$(hook stop "{\"cwd\":\"$REPO\"}")
-expect "未收尾时拦下" "$out" '"decision": "block"'
-out=$(hook stop "{\"cwd\":\"$REPO\",\"stop_hook_active\":true}"); [ -z "$out" ] && ok "stop_hook_active 时放行" || fail "防死循环" "$out"
+out=$(hook stop "{\"cwd\":\"$REPO\",\"stop_hook_active\":true}"); [ -z "$out" ] && ok "已有 Stop 续跑时保持安静" || fail "续跑出现提醒" "$out"
 $L ask >/dev/null
-out=$(hook stop "{\"cwd\":\"$REPO\"}"); [ -z "$out" ] && ok "冲突闸门等待用户时不拦" || fail "ask 后仍拦" "$out"
+out=$(hook stop "{\"cwd\":\"$REPO\"}"); [ -z "$out" ] && ok "等待冲突确认时保持安静" || fail "等待确认时出现提醒" "$out"
 hook prompt "{\"cwd\":\"$REPO\",\"prompt\":\"1\"}" >/dev/null
-out=$(hook stop "{\"cwd\":\"$REPO\"}"); expect "用户回复后恢复收尾检查" "$out" '"decision": "block"'
+out=$(hook stop "{\"cwd\":\"$REPO\"}")
+expect "用户回复后可收到补做提醒" "$out" "需要时可以让助手补做 lw-review"
+python3 -c 'import json, sys; assert set(json.loads(sys.argv[1])) == {"systemMessage"}' "$out" &&
+  ok "Stop 只输出可忽略的消息" || fail "Stop 输出了额外控制字段" "$out"
+out=$(hook stop "{\"cwd\":\"$REPO\"}"); [ -z "$out" ] && ok "同一份改动只提醒一次" || fail "重复提醒" "$out"
 
 echo "技能：lw-review"
 out=$($L score); expect "score 给出级别" "$out" "级别: L"
@@ -115,7 +133,7 @@ open(p, "w").write(s)
 EOF
 out=$($L lint); expect "定稿后 lint 通过" "$out" "台账格式正常"
 out=$($L checkpoint --entry C-002); expect "收尾点归属条目" "$out" "归属 C-002"
-out=$(hook stop "{\"cwd\":\"$REPO\"}"); [ -z "$out" ] && ok "收尾后不再拦" || fail "收尾后仍拦" "$out"
+out=$(hook stop "{\"cwd\":\"$REPO\"}"); [ -z "$out" ] && ok "收尾后保持安静" || fail "收尾后仍有提醒" "$out"
 
 echo "第二个需求：改写了上一条的代码"
 cat >> .light-work/feature-voice.md <<'EOF'
@@ -183,7 +201,7 @@ hook prompt "{\"cwd\":\"$REPO\",\"prompt\":\"改一下\"}" >/dev/null
 git checkout -q feature/voice
 out=$($L context); expect "切回来还是原来的台账" "$out" "C-003"
 
-echo "Codex：apply_patch 补丁 / 等待用户时不拦"
+echo "Codex：apply_patch 补丁 / Stop 提醒"
 git checkout -qb feature/codex
 hook session-start "{\"cwd\":\"$REPO\"}" >/dev/null
 cat >> .light-work/feature-codex.md <<'EOF'
@@ -207,16 +225,11 @@ out=$(codex_edit pre-edit); expect "apply_patch 也能注入约束" "$out" "C-00
 expect "补丁里的每个文件都解析出来" "$out" "改 src/ui/page.ts 前"
 echo 'export function onVoice2(res) { return res ?? { ok: false, reason: "none" }; }' >> src/ui/page.ts
 codex_edit post-edit >/dev/null
-out=$(hook stop "{\"cwd\":\"$REPO\",\"last_assistant_message\":\"改好了一半。空数组也要按失败处理吗？\"}")
-[ -z "$out" ] && ok "AI 最后在问用户时先不拦" || fail "提问时仍拦" "$out"
-out=$(hook stop "{\"cwd\":\"$REPO\",\"last_assistant_message\":\"那我先这样？\"}")
-expect "同一份改动只放过一次" "$out" '"decision": "block"'
+out=$(hook stop "{\"cwd\":\"$REPO\",\"last_assistant_message\":\"改好了，结果如下。\"}")
+expect "apply_patch 改动漏收尾时提示" "$out" '"systemMessage"'
 echo '// 再改一点' >> src/ui/page.ts
-printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"要不要顺便把 legacy 分支也改了？"}]}}' > "$TMP/transcript.jsonl"
-out=$(hook stop "{\"cwd\":\"$REPO\",\"transcript_path\":\"$TMP/transcript.jsonl\"}")
-[ -z "$out" ] && ok "Claude 会话记录里最后在提问也先不拦" || fail "transcript 提问时仍拦" "$out"
-out=$(hook stop "{\"cwd\":\"$REPO\",\"last_assistant_message\":\"改好了，卡片如下。\"}")
-expect "最后不是提问就照常拦" "$out" '"decision": "block"'
+out=$(hook stop "{\"cwd\":\"$REPO\"}")
+expect "出现新改动后可再提醒" "$out" '"systemMessage"'
 out=$($L why src/ui/page.ts:3); expect "why：未提交的行归到 open 条目" "$out" "还没提交的改动"
 expect "why：未提交的行找到条目" "$out" "C-001 · change · open"
 

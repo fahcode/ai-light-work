@@ -108,13 +108,13 @@
 
 | 事件 | 命令 | 行为 |
 |---|---|---|
-| SessionStart（startup / resume / clear / compact） | `hook session-start` | 把脚本复制到 `~/.light-work/lw.py`（给技能和 git 钩子一个稳定路径）；在需求分支上建台账、起点快照和 post-commit 钩子；注入工作流说明和约束摘要 |
-| UserPromptSubmit | `hook prompt` | 列出 open 条目和轮次；像改代码的消息提醒先记录；第 3 轮提醒先找根因；清除"等待冲突确认"标记 |
+| SessionStart（startup / resume / clear / compact） | `hook session-start` | 在 Git 工作区复制脚本到 `~/.light-work/lw.py`，建台账、起点快照和 post-commit 钩子，并注入工作流说明和约束摘要 |
+| UserPromptSubmit | `hook prompt` | 列出 open 条目和轮次。命中改动关键词时提示 AI 判断用户是否要求动手，纯提问直接回答。第 3 轮提醒先找根因，并清除"等待冲突确认"标记 |
 | PreToolUse（Edit / Write / MultiEdit / NotebookEdit / Codex 的 apply_patch） | `hook pre-edit` | 文件路径取 `tool_input.file_path`；Codex 没有这个字段，从补丁文本的 `*** Add/Update/Delete File:`、`*** Move to:` 行解析，一个补丁可以改多个文件。注入这个文件相关的约束，每条只提示一次，并提醒"明确冲突先问"；没有 open 条目时提醒先记录。台账文件本身不触发 |
 | PostToolUse（同上） | `hook post-edit` | 标记"本轮有改动" |
-| Stop | `hook stop` | 本轮有改动，且工作区和上次收尾点不同时返回 `decision: block`，要求执行 lw-review。`stop_hook_active` 为真、或正在等用户回答冲突确认（`lw.py ask`）时放行；AI 最后一句以问号结尾时（Codex 读 `last_assistant_message`，Claude Code 读会话记录末尾）视为还在等用户，同一份改动只放过一次；同一份改动最多拦 2 次 |
+| Stop | `hook stop` | 有改动尚未收尾时，通过 `systemMessage` 提醒可以补做 lw-review，会话正常结束。同一份改动只提示一次，等待冲突确认时跳过 |
 
-Codex 和 Claude Code 的钩子协议基本一致（事件名、matcher、`additionalContext`、`decision: block`、`stop_hook_active`），插件钩子里 `CLAUDE_PLUGIN_ROOT` 在 Codex 下也有，所以三家共用一份 `hooks/hooks.json`。差别只有两处：Codex 编辑文件统一走 `apply_patch`；Codex 的钩子要用户在 `/hooks` 里信任后才运行。
+Codex 和 Claude Code 的钩子协议基本一致（事件名、matcher、`additionalContext`、`systemMessage`、`stop_hook_active`），插件钩子里 `CLAUDE_PLUGIN_ROOT` 在 Codex 下也有，所以三家共用一份 `hooks/hooks.json`。差别只有两处：Codex 编辑文件统一走 `apply_patch`；Codex 的钩子要用户在 `/hooks` 里信任后才运行。
 
 钩子出任何异常都写 stderr、以 0 退出，不会把会话弄坏；同时记到 `~/.light-work/hook-error.txt`（脚本复制失败、post-commit 安装失败也记），下一次 SessionStart 或 UserPromptSubmit 把它注入给 AI，让 AI 告诉用户一次，然后删掉。路径一律先取 `realpath` 再算仓库相对路径（macOS 的 `/tmp`、`/var` 是符号链接）。设 `LW_DEBUG=1` 可以看到完整报错。
 
@@ -124,7 +124,7 @@ Codex 和 Claude Code 的钩子协议基本一致（事件名、matcher、`addit
 
 插件没有任何用户配置文件，也没有开关：
 
-- **基准分支**：依次检测 `origin/HEAD` 指向的分支，以及 main、master、develop。在基准分支和 detached HEAD 上不记录
+- **Git 工作区**：基准分支同样启用自动流程，detached HEAD 使用 `detached-<当前提交短 SHA>` 标识。基准分支仍用于计算分支差异范围
 - **阈值和关键词**：内置在 `scripts/lw.py` 的 `DEFAULTS` 里。要调就直接改插件，所有仓库一起生效
 - **测试命令**：AI 从项目自身（package.json 的 scripts、Makefile、CI 配置）推断
 - **使用了 husky 等 `core.hooksPath` 的仓库**：跳过 post-commit 钩子，提交号会在下次收尾时补上
@@ -137,7 +137,7 @@ Codex 和 Claude Code 的钩子协议基本一致（事件名、matcher、`addit
 2. 用户这次的话没有提到这个行为
 3. 这条约束不是当前条目自己的 open 约束
 
-问法固定：所有冲突合在一条消息里，每个冲突两三行，带编号选项，用户回一个数字就行。问之前调用 `lw.py ask`，Stop 钩子这一轮就不拦截；用户下一条消息到来时，标记自动清除。拿不准的情况不问，写进 `假设`，在卡片里列为"待你拍板"。
+问法固定：所有冲突合在一条消息里，每个冲突两三行，带编号选项，用户回一个数字就行。问之前调用 `lw.py ask`，Stop 钩子这一轮就跳过提醒；用户下一条消息到来时，标记自动清除。拿不准的情况不问，写进 `假设`，在卡片里列为"待你拍板"。
 
 ## 命令速查
 
