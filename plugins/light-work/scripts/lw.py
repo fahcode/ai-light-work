@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ai-light-work / lw.py: 按分支的轻量变更台账 + 确定性复杂度打分（插件核心脚本）。
+"""ai-light-work / lw.py: 按分支的轻量改动记录 + 确定性复杂度打分（插件核心脚本）。
 
 只依赖 Python 3.8+ 标准库和 git。能用规则算出来的（分级、约束匹配、影响面、
 增量范围、条目间冲突）都在这里算；模型只做蒸馏意图、判定约束、写给人看的讲解。
@@ -15,15 +15,15 @@
   checkpoint --entry C-xxx     收尾：记录本轮改动归属哪个条目
   ask                          冲突闸门：向用户确认前调用，本轮跳过收尾提醒
   conflicts                    条目之间的重叠、回退、反复修改
-  why 文件:行 [...]             这一行是哪条台账改动引入的：意图、约束、根因、后来有没有被推翻
+  why 文件:行 [...]             这一行是哪条改动记录引入的：意图、约束、根因、后来有没有被推翻
   lint / stats / backfill
   view [--title T] [--open] < report.md   把报告（stdin）渲染成可看图的网页 .light-work/<分支>.html
 范围: --since-checkpoint | --ledger | --branch | --entry C-xxx | --base REF
 
 存储（全自动，用户不需要关心）:
-  <仓库>/.light-work/<分支>.md     每个分支一份台账（已写入 .git/info/exclude）
+  <仓库>/.light-work/<分支>.md     每个分支一份改动记录（已写入 .git/info/exclude）
   <仓库>/.light-work/<分支>.html   /lw-review 生成的网页（最近一次）
-  refs/light-work/start|cp/<分支>          台账起点和收尾点快照（不在任何分支上）
+  refs/light-work/start|cp/<分支>          改动记录起点和收尾点快照（不在任何分支上）
 """
 import argparse
 import codecs
@@ -40,7 +40,7 @@ import tempfile
 
 LEDGER_DIR = ".light-work"           # 每个分支一个文件：.light-work/<分支>.md
 CP_PREFIX = "refs/light-work/cp/"        # 收尾点链：每次 closeout 一个提交对象，记录 entry 和增量起点
-START_PREFIX = "refs/light-work/start/"  # 台账起点：init 时的工作区快照
+START_PREFIX = "refs/light-work/start/"  # 改动记录起点：init 时的工作区快照
 
 DEFAULTS = {
     "module_depth": 2,
@@ -205,6 +205,20 @@ def split_files(val):
     return out
 
 
+def verification_results(parts):
+    """旧记录里的“没跑”说明只读原文。摘要展示实际执行的结果。"""
+    results = []
+    for part in parts:
+        if part.startswith("✓"):
+            results.append(part)
+        elif part.startswith("✗"):
+            if re.search(r"未(?:做|跑|测|验|执行|运行|联调|核对)|没(?:做|跑|测|验|执行|运行)|待(?:验|联调)", part):
+                continue
+            if re.search(r"→|失败|报错|未通过|\b(?:failed|failure|error)\b", part, re.I):
+                results.append(part)
+    return results
+
+
 def parse_ledger(path):
     entries, errors = [], []
     if not os.path.exists(path):
@@ -249,11 +263,14 @@ def parse_ledger(path):
                 sup += ID_RE.findall(part)
         e["supersedes"] = sup
         e["related"] = [x for x in ID_RE.findall(rel) if x not in sup]
-        ver = f.get("验证", "")
-        e["unverified"] = [s.strip(" ✗") for s in re.split(r"[｜|]", ver) if "✗" in s]
+        ver = [s.strip() for s in re.split(r"[｜|]", f.get("验证", ""))]
+        # 保留旧 JSON 字段供已有调用方读取历史，界面和摘要只读取执行结果。
+        e["unverified"] = [s.strip(" ✗") for s in ver if s.startswith("✗")]
+        e["verification_results"] = verification_results(ver)
+        e["failed_checks"] = [s[1:].strip() for s in e["verification_results"] if s.startswith("✗")]
         e["assumptions"] = f.get("假设", "")
         e["rounds"] = len(set(re.findall(r"\bR(\d+)", f.get("过程", "")))) or (1 if f.get("过程") else 0)
-        e["verified"] = [s.strip(" ✓") for s in re.split(r"[｜|]", ver) if "✓" in s]
+        e["verified"] = [s[1:].strip() for s in e["verification_results"] if s.startswith("✓")]
         for c in e["constraints"]:
             c["files"] = e["files"]
             c["status"] = e["status"]
@@ -369,10 +386,10 @@ def entry_ranges(entries, mode, ref):
         if ref is None and selected:
             ref = selected[-1]["id"]
         if ref is None:
-            die("当前分支没有可检查的台账改动。")
+            die("当前分支没有可检查的改动记录。")
         selected = [e for e in entries if e["id"] == ref and e["type"] != "baseline"]
         if not selected:
-            die("台账没有条目 %s。" % ref)
+            die("改动记录没有条目 %s。" % ref)
     ids = {e["id"] for e in selected}
     rounds = [c for c in checkpoint_chain() if c["entry"] in ids and c["from"]]
     recorded = {c["entry"] for c in rounds}
@@ -382,7 +399,7 @@ def entry_ranges(entries, mode, ref):
             die("%s 还没有收尾点，暂无可归属的 diff。" % ref)
         label = "%s 的 %d 轮修改" % (ref, len(rounds))
     else:
-        label = "全部台账改动（%d 条，%d 轮）" % (len(recorded), len(rounds))
+        label = "全部已记录改动（%d 条，%d 轮）" % (len(recorded), len(rounds))
         if missing:
             label += " · 暂无收尾点: " + ", ".join(missing)
     return [(c["from"], c["tree"]) for c in rounds], label, selected
@@ -405,13 +422,13 @@ def resolve_range(root, cfg, mode, ref=None):
     if mode == "ledger":
         sr = start_ref(br)
         if git_ok("rev-parse", "--verify", "-q", sr):
-            return [(git("rev-parse", sr + "^{tree}").strip(), cur)], "台账范围（台账起点..工作区）"
-        return resolve_range(root, cfg, "branch")[0], "台账没有起点记录，退化为整个分支"
+            return [(git("rev-parse", sr + "^{tree}").strip(), cur)], "改动记录范围（改动记录起点..工作区）"
+        return resolve_range(root, cfg, "branch")[0], "改动记录没有起点记录，退化为整个分支"
     # checkpoint（默认）
     if git_ok("rev-parse", "--verify", "-q", cp_ref(br)):
         return [(git("rev-parse", cp_ref(br) + "^{tree}").strip(), cur)], "上次收尾点..工作区"
     if git_ok("rev-parse", "--verify", "-q", start_ref(br)):
-        return [(git("rev-parse", start_ref(br) + "^{tree}").strip(), cur)], "台账起点..工作区"
+        return [(git("rev-parse", start_ref(br) + "^{tree}").strip(), cur)], "改动记录起点..工作区"
     return [(head_or_empty(), cur)], "HEAD..工作区（还没有收尾点）"
 
 
@@ -501,7 +518,7 @@ def analyze(root, cfg, mode="checkpoint", ref=None, nhunks=4, current_entry=None
         if current_entry:
             scoped_entries = [e for e in change_entries(entries) if e["id"] == current_entry]
             if not scoped_entries:
-                die("台账没有可用条目 %s。" % current_entry)
+                die("改动记录没有可用条目 %s。" % current_entry)
             label = "%s 的本轮改动" % current_entry
     parts = []
     for base, end in segs:
@@ -567,7 +584,7 @@ def analyze(root, cfg, mode="checkpoint", ref=None, nhunks=4, current_entry=None
     hi_strong = sorted(hi_path | {k for k, n in hi_line.items() if n >= 2})
     hi_weak = sorted(set(hi_line) - set(hi_strong))
 
-    # 台账交叉
+    # 改动记录交叉
     act, _ = active_constraints(entries)
     changed = list(diff.keys())
     touched = [c for c in act if not c["global"] and any(path_match(p, c["files"]) for p in changed)]
@@ -621,7 +638,7 @@ def analyze(root, cfg, mode="checkpoint", ref=None, nhunks=4, current_entry=None
         bump(3, "schema/迁移/接口定义: %s" % ", ".join(schema[:4]))
     # 触及约束不抬级别（级别 = 人理解它要花多少力气），但无论哪一级卡片都要带约束核对
     if touched:
-        reasons.append("·· 触及台账约束 %s（不抬级别，卡片里必须逐条核对）" % ", ".join(c["id"] for c in touched[:8]))
+        reasons.append("·· 触及改动记录约束 %s（不抬级别，卡片里必须逐条核对）" % ", ".join(c["id"] for c in touched[:8]))
 
     # 影响面：删掉/改了签名的定义，用 git grep 实测还有谁在引用
     minus, plus = {}, {}
@@ -665,7 +682,7 @@ def analyze(root, cfg, mode="checkpoint", ref=None, nhunks=4, current_entry=None
     if eff_del >= 20 and eff_del > 2 * (eff_lines - eff_del):
         flags.append("以删除为主（删 %d 行）——确认没有删掉别人依赖的分支" % eff_del)
     if unregistered and entries:
-        flags.append("有 %d 个文件不属于任何台账条目" % len(unregistered))
+        flags.append("有 %d 个文件不属于任何改动记录条目" % len(unregistered))
 
     hunks = []
     for p in eff_files:
@@ -692,9 +709,9 @@ def analyze(root, cfg, mode="checkpoint", ref=None, nhunks=4, current_entry=None
 
 # ───────────────────────── commands ─────────────────────────
 
-LEDGER_HEAD = """# 变更台账 · {branch}
+LEDGER_HEAD = """# 改动记录 · {branch}
 
-> 基准分支: {base} · 创建: {date} · 由 ai-light-work 自动维护，切换分支会自动换成那个分支自己的台账。
+> 基准分支: {base} · 创建: {date} · 由 ai-light-work 自动维护，切换分支会自动换成那个分支自己的改动记录。
 > 规矩: open 条目可以续改；提交后自动转 settled，之后只追加不改写；需求变了开新条目并写 `关联: supersedes C-xxx.n`。
 
 """
@@ -708,7 +725,7 @@ def ensure_exclude(root):
     txt = open(ex, encoding="utf-8").read() if os.path.exists(ex) else ""
     if "/%s/" % LEDGER_DIR not in txt.split():
         with open(ex, "a", encoding="utf-8") as f:
-            f.write("\n# ai-light-work（个人台账，不进团队仓库）\n/%s/\n" % LEDGER_DIR)
+            f.write("\n# ai-light-work（个人改动记录，不进团队仓库）\n/%s/\n" % LEDGER_DIR)
 
 
 HOOK_LINE = 'python3 "$HOME/.light-work/lw.py" backfill 2>/dev/null || true  # ai-light-work'
@@ -728,7 +745,7 @@ def install_hook(root):
     with open(hp, "w", encoding="utf-8") as f:
         f.write(txt.rstrip("\n") + "\n" + HOOK_LINE + "\n")
     os.chmod(hp, 0o755)
-    print("  · 已安装 post-commit 钩子（提交后自动把 SHA 回填到台账）")
+    print("  · 已安装 post-commit 钩子（提交后自动把 SHA 回填到改动记录）")
 
 
 def make_commit(tree, msg, *parents):
@@ -744,7 +761,7 @@ def make_commit(tree, msg, *parents):
 
 
 def init_ledger(root, cfg, quiet=False, hook=True):
-    """幂等：建分支目录、本地 exclude、post-commit 钩子、台账文件、台账起点快照。返回 (台账路径, 是否新建)。"""
+    """幂等：建分支目录、本地 exclude、post-commit 钩子、改动记录文件、改动记录起点快照。返回 (改动记录路径, 是否新建)。"""
     say = (lambda *x: None) if quiet else print
     br = current_branch()
     os.makedirs(os.path.join(root, LEDGER_DIR), exist_ok=True)
@@ -783,14 +800,14 @@ def cmd_context(a):
     br = current_branch()
     base = detect_base(cfg)
     lp = ledger_path(root, br)
-    print("当前分支状态（每次从台账实时生成，相当于一份不会过期的 handoff）")
-    print("分支: %s  基准: %s  台账: %s" % (br, base, os.path.relpath(lp, root)))
+    print("当前分支状态（每次从改动记录实时生成，相当于一份不会过期的 handoff）")
+    print("分支: %s  基准: %s  改动记录: %s" % (br, base, os.path.relpath(lp, root)))
     if not os.path.exists(lp):
-        print("还没有台账（开新会话时插件会自动创建）。")
+        print("还没有改动记录（开新会话时插件会自动创建）。")
         return
     entries, errors = parse_ledger(lp)
     if errors:
-        print("⚠ 台账格式问题 %d 处（运行 lint 查看）" % len(errors))
+        print("⚠ 改动记录格式问题 %d 处（运行 lint 查看）" % len(errors))
     act, _ = active_constraints(entries)
     files = a.files or []
     if files:
@@ -810,18 +827,13 @@ def cmd_context(a):
         print("\n## 未定稿（open）——新需求如果是同一意图的续改，就更新它而不是新开")
         for e in opens:
             print("- %s %s · 意图: %s" % (e["id"], e["title"], e["fields"].get("意图", "")))
-            if e["unverified"]:
-                print("  未验证: %s" % "；".join(e["unverified"]))
+            if e["failed_checks"]:
+                print("  已记录的验证失败: %s" % "；".join(e["failed_checks"]))
             if e["assumptions"]:
                 print("  假设: %s" % e["assumptions"])
     print("\n## 最近条目")
     for e in entries[-8:]:
         print("- " + index_line(e))
-    unv = [(e["id"], u) for e in entries if e["status"] != "dropped" for u in e["unverified"]]
-    if unv:
-        print("\n## 累计未验证 %d 项（不要把“没验证”当成“没问题”）" % len(unv))
-        for i, u in unv[-6:]:
-            print("- %s: %s" % (i, u))
 
 
 def cmd_next_id(a):
@@ -877,15 +889,15 @@ def print_analysis(r, show_hunks=True, check_mode=False):
     if check_mode:
         ents = [e for e in r["entries"] if e["status"] != "dropped"]
         opens = [e for e in ents if e["status"] == "open"]
-        unv = [(e["id"], u) for e in ents for u in e["unverified"]]
+        failures = [(e["id"], result) for e in ents for result in e["failed_checks"]]
         nosha = [e["id"] for e in ents if e["type"] != "baseline" and not e["shas"]]
         asm = [(e["id"], e["assumptions"]) for e in ents if e["assumptions"] and e["assumptions"] not in ("无", "-")]
         if opens:
             print("\n未定稿 open: %s" % ", ".join("%s %s" % (e["id"], e["title"]) for e in opens))
-        if unv:
-            print("未验证项:")
-            for i, u in unv:
-                print("  - %s: %s" % (i, u))
+        if failures:
+            print("已记录的验证失败:")
+            for i, result in failures:
+                print("  - %s: %s" % (i, result))
         if asm:
             print("未确认的假设:")
             for i, s in asm:
@@ -902,13 +914,13 @@ def print_analysis(r, show_hunks=True, check_mode=False):
                 print("    " + b)
             if h["truncated"]:
                 print("    …")
-    print("\n台账: %s" % r["ledger"])
+    print("\n改动记录: %s" % r["ledger"])
 
 
 def strip_for_json(r):
     out = dict(r)
     out.pop("evidence", None)
-    out["entries"] = [{k: e[k] for k in ("id", "type", "status", "title", "level", "shas", "unverified", "files")}
+    out["entries"] = [{k: e[k] for k in ("id", "type", "status", "title", "level", "shas", "unverified", "failed_checks", "files")}
                       for e in r["entries"]]
     return out
 
@@ -964,7 +976,7 @@ def cmd_check(a):
     else:
         print_analysis(r, show_hunks=a.hunks > 0, check_mode=True)
         if errors:
-            print("\n台账格式问题:")
+            print("\n改动记录格式问题:")
             for e in errors:
                 print("  - " + e)
 
@@ -1027,7 +1039,7 @@ def cmd_lint(a):
     root = repo_root()
     lp = ledger_path(root)
     if not os.path.exists(lp):
-        die("没有台账: %s" % os.path.relpath(lp, root))
+        die("没有改动记录: %s" % os.path.relpath(lp, root))
     entries, errors = parse_ledger(lp)
     ids = [e["id"] for e in entries]
     all_ids = set(ids) | {c["id"] for e in entries for c in e["constraints"]}
@@ -1057,7 +1069,7 @@ def cmd_lint(a):
             errors.append("%s 是已定稿的 bug，但「根因」还没写" % e["id"])
         for v in e["verified"]:
             if re.search(r"(应该|理论上|估计|看起来|大概|should|probably|seems)", v, re.I):
-                errors.append("%s 的验证「%s」不是证据——写实际跑的命令和结果，没跑就标 ✗" % (e["id"], v))
+                errors.append("%s 的验证「%s」不是证据——只写实际执行的检查和结果" % (e["id"], v))
         for s in e["supersedes"] + e["related"]:
             if s not in all_ids:
                 errors.append("%s 引用了不存在的 %s" % (e["id"], s))
@@ -1066,7 +1078,7 @@ def cmd_lint(a):
         for x in errors:
             print("  - " + x)
         sys.exit(1)
-    print("✓ 台账格式正常（%d 条）" % len(entries))
+    print("✓ 改动记录格式正常（%d 条）" % len(entries))
 
 
 def cmd_backfill(a):
@@ -1128,7 +1140,8 @@ def cmd_stats(a):
     for e in ch:
         by_type[e["type"]] = by_type.get(e["type"], 0) + 1
     print("类型: " + " · ".join("%s %d" % kv for kv in by_type.items()))
-    print("open %d · 未验证 %d 项" % (sum(e["status"] == "open" for e in ch), sum(len(e["unverified"]) for e in ch)))
+    print("open %d · 已记录的验证失败 %d 项" % (sum(e["status"] == "open" for e in ch),
+                                               sum(len(e["failed_checks"]) for e in ch)))
     if cnt[3] / n > 0.3:
         print("⚠ L3 占比 %.0f%%：问题多半在改动粒度——先把需求拆小，而不是把 review 做得更重。" % (100.0 * cnt[3] / n))
 
@@ -1259,7 +1272,7 @@ def cmd_conflicts(a):
     if a.json:
         print(json.dumps(res, ensure_ascii=False, indent=1))
         return
-    print("台账: %s · 有逐条 diff 的条目 %d 个（%s）" % (os.path.relpath(lp, root), len(order), ", ".join(order) or "-"))
+    print("改动记录: %s · 有逐条 diff 的条目 %d 个（%s）" % (os.path.relpath(lp, root), len(order), ", ".join(order) or "-"))
     if not chain:
         print("还没有任何收尾点：逐条冲突分析要等 closeout 记录过至少一次。")
     if pending:
@@ -1289,13 +1302,13 @@ def cmd_conflicts(a):
 
 # ───────────────────────── hooks（插件自动化）─────────────────────────
 
-WORKFLOW = """[ai-light-work] 当前分支 {branch} 的变更台账：{ledger}。LW = python3 ~/.light-work/lw.py
+WORKFLOW = """[ai-light-work] 当前分支 {branch} 的改动记录：{ledger}。LW = python3 ~/.light-work/lw.py
 结合上下文确认用户要求动手修改代码（修 bug / 需求变更 / 调整行为）后，按顺序自动执行：
   1. lw-record  先把这次意图记成 open 条目（同一意图的续改就更新原条目；推翻已有约束先问用户）
-  2. lw-edit    bug 先找根因；按"手术刀"原则改代码；改动明显和台账约束冲突而用户没提时，先用一句话请用户选
+  2. lw-edit    bug 先找根因；按"手术刀"原则改代码；改动明显和改动记录约束冲突而用户没提时，先用一句话请用户选
   3. lw-review  用编辑前快照审阅本轮 → 定稿条目 → 输出 review 卡片 → 记录收尾点
-按需调用 lw-check 核对回归和验证缺口。编辑流程调用 review 或 check 时传入本轮起点和条目号；用户直接调用时默认最近一条，支持 C-xxx、all、branch。纯问答、读代码、解释、跑命令不记账。
-查 bug 想知道某行代码是哪次改动、为什么这么写：$LW why 文件:行。台账、状态、快照全部自动维护，不要让用户做任何设置。"""
+按需调用 lw-check 核对回归和验证缺口。编辑流程调用 review 或 check 时传入本轮起点和条目号；用户直接调用时默认最近一条，支持 C-xxx、all、branch。纯问答、读代码、解释、跑命令不记录。
+查 bug 想知道某行代码是哪次改动、为什么这么写：$LW why 文件:行。改动记录、状态、快照全部自动维护，不要让用户做任何设置。"""
 
 CHANGE_INTENT = re.compile(
     r"(改|修|bug|报错|不对|不行|有问题|不要|换成|改成|加个|加上|新增|删掉|去掉|调整|优化|重构|实现|支持|兼容|"
@@ -1323,7 +1336,7 @@ def take_error():
         os.remove(ERR_FILE)
     except Exception:
         return None
-    return ("[ai-light-work] 插件上次运行出错（%s），台账可能没有正常记录。"
+    return ("[ai-light-work] 插件上次运行出错（%s），改动记录可能没有正常记录。"
             "请在这一轮回复的开头用一句话告诉用户，并建议在 GitHub fahcode/ai-light-work 反馈。" % msg) if msg else None
 
 
@@ -1356,10 +1369,10 @@ def install_shim():
 
 
 def ledger_branch_ctx(root):
-    """返回当前 Git 工作区的台账上下文。"""
+    """返回当前 Git 工作区的改动记录上下文。"""
     cfg = load_cfg(root)
     lp = ledger_path(root)
-    if not os.path.exists(lp):  # 会话中途切了分支：当场给新分支建台账，用户无感
+    if not os.path.exists(lp):  # 会话中途切了分支：当场给新分支建改动记录，用户无感
         lp, _ = init_ledger(root, cfg, quiet=True)
     return cfg, lp
 
@@ -1388,7 +1401,7 @@ PATCH_FILE_RE = re.compile(r"^\*\*\* (?:(?:Add|Update|Delete) File|Move to):\s*(
 
 
 def edited_paths(root, data):
-    """这次工具调用要改哪些文件（仓库相对路径，不含台账目录）。
+    """这次工具调用要改哪些文件（仓库相对路径，不含改动记录目录）。
     Claude Code / CodeBuddy：tool_input.file_path；Codex：tool_name=apply_patch，从补丁文本里解析。"""
     ti = data.get("tool_input")
     cands = []
@@ -1514,7 +1527,7 @@ def hook_stop(root, data):
 
 
 def cmd_why(a):
-    """文件:行 → git blame → 提交号 → 台账条目。未提交的行按文件归到 open 条目。"""
+    """文件:行 → git blame → 提交号 → 改动记录条目。未提交的行按文件归到 open 条目。"""
     root = repo_root()
     entries, _ = parse_ledger(ledger_path(root))
     entries = [e for e in entries if e["status"] != "dropped"]
@@ -1562,7 +1575,7 @@ def cmd_why(a):
                 for e in hits:
                     show(e, path)
                 if not hits:
-                    print("  台账里没有条目登记过这个文件（可能是没走台账的改动）")
+                    print("  改动记录里没有条目登记过这个文件（可能是没走改动记录的改动）")
                 continue
             info = git("log", "-1", "--date=short", "--format=%h %ad %s", sha, check=False, cwd=root).strip()
             print("%s ← %s" % (spec, info))
@@ -1575,9 +1588,9 @@ def cmd_why(a):
             if mb and git_ok("merge-base", "--is-ancestor", sha, mb):
                 print("  基准分支上就有的代码，不是这个分支改的")
             elif start_ct and int(git("log", "-1", "--format=%ct", sha, check=False).strip() or 0) <= start_ct:
-                print("  台账起点之前的提交（最初的功能开发），台账里没有逐条记录")
+                print("  改动记录起点之前的提交（最初的功能开发），改动记录里没有逐条记录")
             else:
-                print("  这个提交没有对应的台账条目（可能是没走台账的改动）")
+                print("  这个提交没有对应的改动记录条目（可能是没走改动记录的改动）")
                 for e in by_file[-3:]:
                     print("  同文件的条目: %s %s" % (e["id"], e["title"]))
 
@@ -1746,7 +1759,7 @@ summary {{ cursor: pointer; font-weight: 600; overflow-wrap: anywhere }}
 <header class="overview"><div class="meta">{scope}</div><h1>{title}</h1>{facts}{overview}</header>
 {report}
 {evidence}
-<details class="panel" id="ledger-raw"><summary>台账原文</summary><pre>{ledger}</pre></details>
+<details class="panel" id="ledger-raw"><summary>改动记录原文</summary><pre>{ledger}</pre></details>
 </main></div>
 <script>
 function reveal() {{
@@ -1976,8 +1989,9 @@ def review_page(title, branch, report, ledger, analysis):
         facts = '<ul class="facts"><li>L%d</li><li>%d 个文件</li><li>+%d / −%d</li></ul>' % (
             analysis["level"], len(files), added, deleted)
         if len(analysis["entries"]) == 1:
-            fields = analysis["entries"][0]["fields"]
-            values = [f"<dt>{key}</dt><dd>{escape(fields[key])}</dd>" for key in ("意图", "验证") if fields.get(key)]
+            entry = analysis["entries"][0]
+            fields = {"意图": entry["fields"].get("意图"), "验证": " ｜ ".join(entry["verification_results"])}
+            values = [f"<dt>{key}</dt><dd>{escape(value)}</dd>" for key, value in fields.items() if value]
             if values:
                 overview = "<dl>" + "".join(values) + "</dl>"
     if report:
@@ -1988,7 +2002,9 @@ def review_page(title, branch, report, ledger, analysis):
         nav += '<a href="#evidence">全部代码证据</a>'
         evidence = '<section class="panel" id="evidence"><h2>代码证据</h2>' + (
             panels or "<p>这个范围没有文件差异。</p>") + "</section>"
-    nav += '<a href="#ledger-raw">台账原文</a>'
+    nav += '<a href="#ledger-raw">改动记录原文</a>'
+    # 展示旧文件时统一标题，原文件和历史条目留在原处。
+    ledger = re.sub(r"\A# 变更台账(?= · )", "# 改动记录", ledger)
     return VIEW_HTML.format(title=escape(title), scope=escape(scope), facts=facts, overview=overview,
                             nav=nav, report=report, evidence=evidence, ledger=escape(ledger))
 
@@ -1999,7 +2015,7 @@ def cmd_view(a):
     br = current_branch()
     lp = ledger_path(root, br)
     if not os.path.exists(lp):
-        die("当前分支还没有台账")
+        die("当前分支还没有改动记录")
     report = "" if sys.stdin.isatty() else sys.stdin.read().strip()
     analysis = None
     if a.scope or a.base:
@@ -2020,7 +2036,7 @@ def cmd_view(a):
 
 
 def main():
-    ap = argparse.ArgumentParser(prog="lw.py", description="ai-light-work 按分支变更台账")
+    ap = argparse.ArgumentParser(prog="lw.py", description="ai-light-work 按分支改动记录")
     sp = ap.add_subparsers(dest="cmd")
     p = sp.add_parser("init"); p.add_argument("--force", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(fn=cmd_init)
@@ -2036,13 +2052,13 @@ def main():
         g.add_argument("--base", help="从指定 ref 到工作区")
         p.add_argument("--current-entry", help="与 --base 一起标记编辑流程的本轮条目")
         g.add_argument("--branch", action="store_true", help="整个分支（分叉点..工作区）")
-        g.add_argument("--ledger", action="store_true", help="台账范围（台账起点..工作区）")
+        g.add_argument("--ledger", action="store_true", help="改动记录范围（改动记录起点..工作区）")
         g.add_argument("--since-checkpoint", action="store_true", help="上次收尾点..工作区")
         g.add_argument("--entry", help="某个条目所有轮次的改动，如 C-004")
         if name == "score":
-            g.add_argument("--latest-entry", action="store_true", help="最近一条台账改动")
+            g.add_argument("--latest-entry", action="store_true", help="改动记录中最近一条")
         else:
-            g.add_argument("--all-entries", action="store_true", help="所有台账条目已收尾的改动")
+            g.add_argument("--all-entries", action="store_true", help="所有改动记录条目已收尾的改动")
         p.add_argument("--hunks", type=int, default=nh)
         p.add_argument("--json", action="store_true")
         p.set_defaults(fn=fn)
@@ -2050,11 +2066,11 @@ def main():
     p = sp.add_parser("checkpoint"); p.add_argument("--entry"); p.add_argument("--base"); p.add_argument("--force", action="store_true")
     p.set_defaults(fn=cmd_checkpoint)
     p = sp.add_parser("conflicts"); p.add_argument("--json", action="store_true")
-    p.add_argument("--recorded-only", action="store_true", help="只分析已归属台账条目的收尾点")
+    p.add_argument("--recorded-only", action="store_true", help="只分析已归属改动记录条目的收尾点")
     p.set_defaults(fn=cmd_conflicts)
     sp.add_parser("lint").set_defaults(fn=cmd_lint)
     sp.add_parser("ask", help="冲突闸门提问前调用").set_defaults(fn=cmd_ask)
-    p = sp.add_parser("why", help="这一行是哪条台账改动引入的"); p.add_argument("targets", nargs="+", metavar="文件:行")
+    p = sp.add_parser("why", help="这一行是哪条改动记录引入的"); p.add_argument("targets", nargs="+", metavar="文件:行")
     p.set_defaults(fn=cmd_why)
     p = sp.add_parser("backfill"); p.add_argument("--commit", default="HEAD"); p.set_defaults(fn=cmd_backfill)
     sp.add_parser("stats").set_defaults(fn=cmd_stats)

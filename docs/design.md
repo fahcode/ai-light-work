@@ -4,7 +4,7 @@
 
 | 层 | 内容 | 谁来做 |
 |---|---|---|
-| 采集 | 用户意图 → 台账条目 | `lw-record` 技能（模型） |
+| 采集 | 用户意图 → 改动记录条目 | `lw-record` 技能（模型） |
 | 约束 | 改代码前把相关约束交给 AI；改完逐条核对 | 钩子 + `lw.py context/score`（确定性），判断由模型做；明确冲突由 `lw-edit` 的冲突闸门交给用户选 |
 | 呈现 | 按复杂度出 L0~L3 卡片 | `lw.py score` 定级别和素材，`lw-review` 写讲解 |
 | 检查 | 条目之间的冲突、回归 | `lw.py conflicts/check` 找候选，`/lw-check` 判定 |
@@ -14,9 +14,9 @@
 
 ---
 
-## 台账格式
+## 改动记录格式
 
-每个分支一个文件：`.light-work/<分支>.md`（分支名里的 `/` 等字符换成 `-`，如 `feature/voice` → `feature-voice.md`）。当前在哪个分支就读写哪一份；会话中途切分支，下一次钩子触发时自动换过去，新分支第一次出现时自动建台账。
+每个分支一个文件：`.light-work/<分支>.md`（分支名里的 `/` 等字符换成 `-`，如 `feature/voice` → `feature-voice.md`）。当前在哪个分支就读写哪一份；会话中途切分支，下一次钩子触发时自动换过去，新分支第一次出现时自动建改动记录。
 
 ```markdown
 ### C-004 · 2026-11-19 · bug · open · 空结果被当成成功
@@ -67,12 +67,12 @@
 
 - 有效改动不算测试、锁文件、生成物、文档和图片
 - 一个信号只按它能达到的最高级别计一次
-- **触及台账约束不提高级别**：否则大多数改动都会变成 L2，人很快就看不下去了。但无论哪一级，卡片里都必须逐条核对约束
+- **触及改动记录约束不提高级别**：否则大多数改动都会变成 L2，人很快就看不下去了。但无论哪一级，卡片里都必须逐条核对约束
 - 接口变化只算"删除导出"和"签名改变"；常量改值、新增导出不算
 
 额外的 ⚠ 标记（不影响级别，卡片里必须回应）：
 - 删除了某个符号，但 `git grep` 显示还有引用
-- 有文件不属于任何台账条目（"改完这个带出那个"最常见的来源）
+- 有文件不属于任何改动记录条目（"改完这个带出那个"最常见的来源）
 - 改了 ≥30 行逻辑，但没有任何测试改动
 - 改动以删除为主
 
@@ -82,9 +82,9 @@
 
 | review / check 参数 | 范围 |
 |---|---|
-| 空 | 最近一条台账改动 |
+| 空 | 改动记录中最近一条 |
 | `C-xxx` | 指定条目已收尾的各轮差异 |
-| `all` / `a` | 所有台账条目的已收尾轮次 |
+| `all` / `a` | 所有改动记录条目的已收尾轮次 |
 | `branch` / `b` | 与基准分支的分叉点 → 工作区 |
 | `--base REF --current-entry C-xxx` | 编辑流程内部使用，范围是本轮起点 → 工作区 |
 
@@ -92,19 +92,21 @@
 
 "工作区"包括未提交、未跟踪的文件（遵守 .gitignore）。脚本用一个临时 index 把工作区写成 git tree，不会动你的真实 index。
 
+改动记录的「验证」只保存实际执行的检查和结果。需要说明的验收缺口放在本轮报告。旧文件可以继续读取，未执行项目保留在历史原文里，摘要和报告概览只显示执行结果。
+
 ## 审阅网页
 
-`view --scope latest|C-xxx|all|branch` 复用审阅的范围。自动审阅使用 `view --base REF --current-entry C-xxx`。Python 直接渲染范围、文件增删统计、代码证据和台账信息。助手通过标准输入补充解释和验证结论，反引号中的 `文件:行` 链接到对应补丁行或文件。多轮存在同一行号时优先使用最近的新版行，补丁标题保留快照范围。
+`view --scope latest|C-xxx|all|branch` 复用审阅的范围。自动审阅使用 `view --base REF --current-entry C-xxx`。Python 直接渲染范围、文件增删统计、代码证据和改动记录信息。助手通过标准输入补充解释和验证结论，反引号中的 `文件:行` 链接到对应补丁行或文件。多轮存在同一行号时优先使用最近的新版行，补丁标题保留快照范围。
 
 生成产物、锁文件等被评分规则排除的文件只展示路径与统计。普通文件优先展示正文引用的差异，其余以有限的补丁片段作为补充。网页标明省略的片段和行数。完整差异通过 Git 查看。
 
-正文支持标题、列表、表格和代码块。L0、L1 以聊天短卡片为主。L2、L3 或分支报告可使用 `flow`、`sequence`、`architecture` 画流程、交互和模块关系，每行按 `来源 -> 目标 | 说明` 书写。简单 `flow` 也可每行写一个步骤。历史 Mermaid 块保留源文本。摘要、导航、补丁、图和台账均可离线阅读。省略范围参数时，`view` 仍可接收纯说明文字。
+正文支持标题、列表、表格和代码块。按场景对照改前和改后。共用数据、状态或条件的改动，说明相互影响并链接证据。L0、L1 以聊天短卡片为主。L2、L3 或分支报告可使用 `flow`、`sequence`、`architecture` 画流程、交互和模块关系，每行按 `来源 -> 目标 | 说明` 书写。简单 `flow` 也可每行写一个步骤。历史 Mermaid 块保留源文本。摘要、导航、补丁、图和改动记录均可离线阅读。省略范围参数时，`view` 仍可接收纯说明文字。
 
 ## 快照
 
 | ref | 内容 |
 |---|---|
-| `refs/light-work/start/<slug>` | 第一次建台账时的工作区，即"台账范围"的起点 |
+| `refs/light-work/start/<slug>` | 第一次建改动记录时的工作区，即"改动记录范围"的起点 |
 | `refs/light-work/cp/<slug>` | 收尾点链。自动 review 用 `checkpoint --entry C-xxx --base REF` 记录条目和本轮起点。起点 tree 由收尾点引用，供以后按条目审阅 |
 
 `/lw-check` 靠收尾点链拿到每个条目每一轮的 diff，再算出：
@@ -118,9 +120,9 @@
 
 | 事件 | 命令 | 行为 |
 |---|---|---|
-| SessionStart（startup / resume / clear / compact） | `hook session-start` | 在 Git 工作区复制脚本到 `~/.light-work/lw.py`，建台账、起点快照和 post-commit 钩子，并注入工作流说明和约束摘要 |
+| SessionStart（startup / resume / clear / compact） | `hook session-start` | 在 Git 工作区复制脚本到 `~/.light-work/lw.py`，建改动记录、起点快照和 post-commit 钩子，并注入工作流说明和约束摘要 |
 | UserPromptSubmit | `hook prompt` | 列出 open 条目和轮次。命中改动关键词时提示 AI 判断用户是否要求动手，纯提问直接回答。第 3 轮提醒先找根因，并清除"等待冲突确认"标记 |
-| PreToolUse（Edit / Write / MultiEdit / NotebookEdit / Codex 的 apply_patch） | `hook pre-edit` | 文件路径取 `tool_input.file_path`；Codex 没有这个字段，从补丁文本的 `*** Add/Update/Delete File:`、`*** Move to:` 行解析，一个补丁可以改多个文件。注入这个文件相关的约束，每条只提示一次，并提醒"明确冲突先问"；没有 open 条目时提醒先记录。台账文件本身不触发 |
+| PreToolUse（Edit / Write / MultiEdit / NotebookEdit / Codex 的 apply_patch） | `hook pre-edit` | 文件路径取 `tool_input.file_path`；Codex 没有这个字段，从补丁文本的 `*** Add/Update/Delete File:`、`*** Move to:` 行解析，一个补丁可以改多个文件。注入这个文件相关的约束，每条只提示一次，并提醒"明确冲突先问"；没有 open 条目时提醒先记录。改动记录文件本身不触发 |
 | PostToolUse（同上） | `hook post-edit` | 标记"本轮有改动" |
 | Stop | `hook stop` | 有改动尚未收尾时，通过 `systemMessage` 提醒可以补做 lw-review，会话正常结束。同一份改动只提示一次，等待冲突确认时跳过 |
 
@@ -161,7 +163,7 @@ $L review --base <tree SHA> --current-entry C-004
 $L snapshot                        # 编辑前获取本轮起点 tree SHA
 $L checkpoint --entry C-004 --base <tree SHA>
 $L ask                            # 冲突闸门提问前
-$L why src/a.ts:42 [src/b.ts:10-20]   # 这行是哪条台账改动引入的
+$L why src/a.ts:42 [src/b.ts:10-20]   # 这行是哪条改动记录引入的
 $L check [C-xxx | all | branch] [--json]
 $L check --base <tree SHA> --current-entry C-004
 $L conflicts [--json]

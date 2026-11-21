@@ -8,7 +8,7 @@
     {
       "name": "light-work",
       "source": "./plugins/light-work",
-      "description": "按分支自动维护的变更台账 + 手术刀式修改 + L0-L3 review 卡片 + 冲突检查与可视化报告"
+      "description": "按分支自动维护的改动记录 + 手术刀式修改 + L0-L3 review 卡片 + 冲突检查与可视化报告"
     }
   ]
 }

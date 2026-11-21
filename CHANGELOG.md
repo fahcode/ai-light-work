@@ -1,9 +1,15 @@
 # 更新记录
 
+## light-work 0.6.5 · 2026-11-20
+
+- 插件中的「改动记录」名称统一应用到命令、报告和文档。
+- 长期记录只记录实际执行的验证。旧文件继续可读，未执行项目不再进入会话摘要。
+- Review 按场景说明改前、改后和有关联的改动怎样影响彼此。
+
 ## light-work 0.6.4 · 2026-11-20
 
 - Review 网页展示审阅范围和文件增删统计，支持从结论直接跳到真实 Git diff。
-- 摘要、文件导航和补丁可离线阅读。复杂改动按需展示流程图、交互图和架构图，台账原文默认折叠。
+- 摘要、文件导航和补丁可离线阅读。复杂改动按需展示流程图、交互图和架构图，改动记录原文默认折叠。
 - 优先展示正文引用的 diff 片段，并修复带引号路径的补丁定位。
 
 ## light-work 0.6.3 · 2026-11-20
@@ -31,7 +37,7 @@
 
 - 支持 Codex：新增 `.codex-plugin/plugin.json` 和 `.agents/plugins/marketplace.json`；编辑钩子能解析 Codex `apply_patch` 补丁里的文件路径（之前在 Codex 下会静默失效：约束不注入、改完不拦）
 - 手动命令 `lw-check` / `lw-report` / `lw-branch` 在 Codex 里也不会自动触发（`agents/openai.yaml` 里 `allow_implicit_invocation: false`）；参数写法兼容不替换 `$ARGUMENTS` 的工具
-- 新增 `lw.py why 文件:行`：git blame → 提交 → 台账条目，带出当时的意图、约束、根因，以及后来有没有被推翻；`lw-edit` 修 bug 前会用
+- 新增 `lw.py why 文件:行`：git blame → 提交 → 改动记录条目，带出当时的意图、约束、根因，以及后来有没有被推翻；`lw-edit` 修 bug 前会用
 - Stop 少误拦：AI 最后一句是在问用户时，同一份改动先放过一次
 - `score` 新增"一层调用方"：改了内部逻辑的函数，列出本轮没改但按名字引用它的文件，只展示不抬级别
 
@@ -55,13 +61,13 @@
 
 - `lw-edit` 精简到"像靠谱的同事那样改"：只改该改的、改一处不坏别处、不过度、写清楚为什么；明显冲突先问一句（从 98 行缩到 45 行）
 - 会话开始注入的"当前分支状态"明确为自动生成、不会过期的 handoff
-- README 重写：补全设计目的、边界、全部功能，以及台账和 handoff 的区别
+- README 重写：补全设计目的、边界、全部功能，以及改动记录和 handoff 的区别
 
 ## light-work 0.4.0 · 2026-11-20
 
 - 统一命名：插件改名为 `light-work`；自动技能 `lw-record` / `lw-edit` / `lw-review`；命令 `/lw-check` / `/lw-report` / `/lw-branch`；脚本 `lw.py`
-- 零配置：去掉 config.json 和暂停开关。台账按分支自动建、自动切换，存放在 `.light-work/<分支>/`
-- 会话中途切换分支也会自动换成对应分支的台账
+- 零配置：去掉 config.json 和暂停开关。改动记录按分支自动建、自动切换，存放在 `.light-work/<分支>/`
+- 会话中途切换分支也会自动换成对应分支的改动记录
 - `git commit` 后，已出过卡片的条目自动转为 settled，用户不需要管理状态
 - `lw-edit` 新增冲突闸门：改动明显违反已有约束而用户没提到时，用一句话、编号选项请用户确认；等待确认时 Stop 钩子不拦截
 - 冒烟测试扩展到 36 项（新增冲突闸门、自动定稿、分支切换）
@@ -70,7 +76,7 @@
 
 - 仓库初始化为 ai-light-work 插件市场
 - surgical-edit 按 Karpathy 风格编码准则的四条原则重写；bug 类修改改为先找根因（参考 obra/superpowers 的 systematic-debugging）
-- 台账新增「根因」字段：已定稿的 bug 没写根因时 lint 报错
+- 改动记录新增「根因」字段：已定稿的 bug 没写根因时 lint 报错
 - 验证必须是证据：「应该没问题」这类表述会被 lint 拒绝（参考 superpowers 的 verification-before-completion）
 - 同一条目改到第 3 轮时，钩子提醒停下来重新找根因
 - 新增 tests/smoke.sh 端到端冒烟测试（27 项）
@@ -79,8 +85,8 @@
 
 - 改成插件：3 个自动技能（ledger-record / surgical-edit / ledger-closeout）、3 个手动命令（/ledger-check、/ledger-report、/branch-report）、5 个钩子
 - 每轮收尾点绑定条目编号，/ledger-check 能找出条目之间的回退和热点
-- 拆分「台账改动报告」和「整个分支汇总」
+- 拆分「改动报告」和「整个分支汇总」
 
 ## 0.1.0
 
-- 台账 + 确定性复杂度打分（L0-L3）+ 影响面（git grep）+ 未登记改动检测
+- 改动记录 + 确定性复杂度打分（L0-L3）+ 影响面（git grep）+ 未登记改动检测

@@ -43,20 +43,20 @@ echo "钩子：Git 工作区判断"
 out=$(hook session-start "{\"cwd\":\"$TMP\"}")
 [ -z "$out" ] && [ ! -e "$HOME/.light-work/lw.py" ] && ok "非 Git 目录跳过初始化" || fail "非 Git 目录触发" "$out"
 out=$(hook session-start "{\"cwd\":\"$REPO\"}")
-expect "基准分支读取台账摘要" "$out" "## 有效约束"
-[ -f .light-work/main.md ] && ok "基准分支自动建台账" || fail "缺少基准分支台账" ""
+expect "基准分支读取改动记录摘要" "$out" "## 有效约束"
+[ -f .light-work/main.md ] && ok "基准分支自动建改动记录" || fail "缺少基准分支改动记录" ""
 out=$($L init); expect "基准分支可直接运行 init" "$out" ".light-work/main.md"
 git checkout -q --detach
 out=$(hook session-start "{\"cwd\":\"$REPO\"}")
-expect "detached HEAD 按当前提交记账" "$out" ".light-work/detached-$(git rev-parse --short HEAD).md"
+expect "detached HEAD 按当前提交记录" "$out" ".light-work/detached-$(git rev-parse --short HEAD).md"
 git checkout -qb feature/voice
 
 echo "钩子：会话开始"
 out=$(hook session-start "{\"cwd\":\"$REPO\"}")
 expect "注入工作流" "$out" "lw-record"
-[ -f .light-work/feature-voice.md ] && ok "自动建台账" || fail "自动建台账" "$(ls -la .light-work)"
+[ -f .light-work/feature-voice.md ] && ok "自动建改动记录" || fail "自动建改动记录" "$(ls -la .light-work)"
 [ -f "$HOME/.light-work/lw.py" ] && ok "安装稳定路径 shim" || fail "shim" ""
-git rev-parse -q --verify refs/light-work/start/feature-voice >/dev/null && ok "记录台账起点" || fail "台账起点" ""
+git rev-parse -q --verify refs/light-work/start/feature-voice >/dev/null && ok "保存改动记录起点" || fail "改动记录起点" ""
 
 echo "钩子：用户消息 / 编辑前"
 out=$(hook prompt "{\"cwd\":\"$REPO\",\"prompt\":\"空字符串也别当成功，改一下\"}")
@@ -64,7 +64,7 @@ expect "确认需要动手才走记录流程" "$out" "确认需要动手时，�
 ledger_before=$(git hash-object .light-work/feature-voice.md)
 out=$(hook prompt "{\"cwd\":\"$REPO\",\"prompt\":\"为什么要这样改？先分析一下\"}")
 expect "提问命中关键词时提示 AI 自行判断" "$out" "纯提问、分析或解释就直接回答，不记条目"
-[ "$(git hash-object .light-work/feature-voice.md)" = "$ledger_before" ] && ok "提示本身不写条目" || fail "提问改变台账" "$out"
+[ "$(git hash-object .light-work/feature-voice.md)" = "$ledger_before" ] && ok "提示本身不写条目" || fail "提问改变改动记录" "$out"
 EDIT="{\"cwd\":\"$REPO\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$REPO/src/search/voice.ts\"}}"
 out=$(hook pre-edit "$EDIT")
 expect "没有 open 条目时提醒" "$out" "还没有 open 条目"
@@ -97,7 +97,7 @@ cat >> .light-work/feature-voice.md <<'EOF'
 - 过程: R1 用户提出
 - 级别: 待定
 EOF
-out=$($L lint); expect "lint 通过" "$out" "台账格式正常"
+out=$($L lint); expect "lint 通过" "$out" "改动记录格式正常"
 out=$(hook pre-edit "$EDIT")
 expect "编辑前注入旧条目的约束" "$out" "C-001.1"
 expect "编辑前注入文件约束" "$out" "C-002.1"
@@ -129,11 +129,19 @@ expect "score 列出要核对的约束" "$out" "C-001.2"
 python3 - <<'EOF'
 p = ".light-work/feature-voice.md"; s = open(p).read()
 s = s.replace("- 根因: 待查", "- 根因: 只判了 null，空字符串落到成功分支 voice.ts:2")
-s = s.replace("- 级别: 待定", "- 级别: L0").replace("- 验证: ✗ 未验证", "- 验证: ✓ node 手测 '' → ok:false ｜ ✗ 真机未跑")
+s = s.replace("- 级别: 待定", "- 级别: L0").replace(
+    "- 验证: ✗ 未验证",
+    "- 验证: ✓ node 手测 '' → ok:false ｜ ✗ fixture-check → 断言失败 ｜ ✗ 未做真机媒体、支付与上报联调")
 open(p, "w").write(s)
 EOF
-out=$($L lint); expect "定稿后 lint 通过" "$out" "台账格式正常"
+out=$($L lint); expect "定稿后 lint 通过" "$out" "改动记录格式正常"
 out=$($L checkpoint --entry C-002 --base "$first_round_base"); expect "收尾点归属条目" "$out" "归属 C-002"
+out=$($L context)
+expect "会话摘要保留实际失败" "$out" "fixture-check → 断言失败"
+grep -qF "未做真机" <<<"$out" && fail "会话摘要带入未执行项目" "$out" || ok "会话摘要跳过未执行项目"
+out=$($L check C-002)
+expect "检查保留实际执行失败" "$out" "fixture-check → 断言失败"
+grep -qF "未做真机" <<<"$out" && fail "检查把未执行当作历史问题" "$out" || ok "检查跳过未执行项目"
 out=$(hook stop "{\"cwd\":\"$REPO\"}"); [ -z "$out" ] && ok "收尾后保持安静" || fail "收尾后仍有提醒" "$out"
 
 echo "第二个需求：改写了上一条的代码"
@@ -180,7 +188,7 @@ expect "发现回退/改写" "$out" "C-003 删除/改写了 C-002"
 expect "发现热点" "$out" "handleResult ← C-002 → C-003"
 out=$($L check); expect "check 默认最近一条" "$out" "C-003 的 1 轮修改"
 expect "check 只显示所选条目的状态" "$out" "未定稿 open: C-003"
-out=$($L check all); expect "全部只包含已归属的收尾轮次" "$out" "全部台账改动（2 条，2 轮）"
+out=$($L check all); expect "全部只包含已归属的收尾轮次" "$out" "全部已记录改动（2 条，2 轮）"
 expect "全部说明哪些条目缺少收尾点" "$out" "暂无收尾点: C-001"
 for command in review check; do
   out=$($L "$command"); expect "$command 默认最近一条" "$out" "C-003 的 1 轮修改"
@@ -215,18 +223,23 @@ echo "提交回填 / 自动定稿 / 页面"
 sed -i.bak 's/- 验证: ✓ 应该没问题/- 验证: ✗ 未验证/' .light-work/feature-voice.md && rm -f .light-work/feature-voice.md.bak
 git add -A && git commit -qm wip
 grep -q "C-002 · 2026-11-20 · bug · settled" .light-work/feature-voice.md && ok "提交后自动转 settled" || fail "自动定稿" "$(grep '^###' .light-work/feature-voice.md)"
-out=$($L lint); expect "定稿后 lint 仍通过" "$out" "台账格式正常"
+out=$($L lint); expect "定稿后 lint 仍通过" "$out" "改动记录格式正常"
 grep -q "提交: [0-9a-f]\{7\}" .light-work/feature-voice.md && ok "post-commit 回填 SHA" || fail "回填" "$(grep 提交 .light-work/feature-voice.md)"
 out=$($L why src/search/voice.ts:2); expect "why：行 → 提交 → 条目" "$out" "C-003"
 expect "why：带出意图" "$out" "意图:"
 out=$($L why src/ui/page.ts:2); expect "why：基准分支上的代码" "$out" "基准分支上就有的代码"
-out=$(printf '# 台账改动报告\n> 两次改动\n' | $L view --title "台账改动报告"); expect "从 stdin 生成页面" "$out" ".light-work/feature-voice.html"
-grep -q "台账改动报告" .light-work/feature-voice.html && ok "页面包含报告内容" || fail "页面内容" ""
+out=$(printf '# 改动报告\n> 两次改动\n' | $L view --title "改动报告"); expect "从 stdin 生成页面" "$out" ".light-work/feature-voice.html"
+grep -q "改动报告" .light-work/feature-voice.html && ok "页面包含报告内容" || fail "页面内容" ""
+sed -i.bak '1s/改动记录/变更台账/' .light-work/feature-voice.md && rm -f .light-work/feature-voice.md.bak
 cat <<'LW_REPORT' | $L view --scope C-002 --title '审阅 <范围>' >/dev/null
 ## 关键改动
 
 - 核对 `src/search/voice.ts:3` 的空字符串处理
 - <script>alert('raw')</script>
+
+| 场景 | 改前 | 改后 | 证据 |
+|---|---|---|---|
+| 输入为空字符串 | 进入成功分支 | 返回失败 | `src/search/voice.ts:3` |
 
 ```flow
 查看输入
@@ -250,6 +263,12 @@ cat <<'LW_REPORT' | $L view --scope C-002 --title '审阅 <范围>' >/dev/null
 ```
 LW_REPORT
 page=$(cat .light-work/feature-voice.html)
+overview=${page%%</header>*}
+expect "报告概览显示实际执行结果" "$overview" "fixture-check → 断言失败"
+grep -qF "未做真机" <<<"$overview" && fail "报告概览带入未执行项目" "$overview" || ok "报告概览跳过未执行项目"
+expect "旧文件用新标题展示" "$page" "# 改动记录 · feature/voice"
+grep -q '^# 变更台账' .light-work/feature-voice.md && ok "旧记录文件保持原样" || fail "写入了旧记录文件" ""
+expect "改前改后在网页中成对显示" "$page" "<th>改前</th><th>改后</th>"
 expect "指定条目报告显示范围" "$page" 'C-002 的 1 轮修改'
 expect "路径行号链接到真实补丁行" "$page" 'href="#file-1-hunk-1-line-3"><code>src/search/voice.ts:3</code>'
 expect "跳转目标存在" "$page" 'id="file-1-hunk-1-line-3"'
@@ -257,7 +276,7 @@ expect "离线步骤图" "$page" '<ol class="flow">'
 expect "离线分支流程图" "$page" '<figure class="diagram flowchart">'
 expect "离线交互图" "$page" '<figure class="diagram sequence">'
 expect "离线架构图" "$page" '<figure class="diagram architecture">'
-expect "台账原文默认折叠" "$page" '<details class="panel" id="ledger-raw">'
+expect "改动记录原文默认折叠" "$page" '<details class="panel" id="ledger-raw">'
 expect "标题和正文中的 HTML 被转义" "$page" '&lt;script&gt;alert'
 grep -q '<script src=' <<<"$page" && fail "报告依赖远程脚本" "" || ok "报告无需加载远程脚本"
 mkdir -p "src/显示"
@@ -280,23 +299,23 @@ expect "生成产物保留增删统计" "$page" '+10000 / −0'
 grep -qF 'generatedOnly' <<<"$page" && fail "报告嵌入生成产物正文" "" || ok "生成产物仅保留统计"
 $L view --scope all </dev/null >/dev/null
 page=$(cat .light-work/feature-voice.html)
-expect "全部台账报告保留各轮差异" "$page" '全部台账改动（2 条，2 轮）'
-grep -qF 'src/显示/中文 文件.ts' <<<"$page" && fail "全部台账报告混入未登记文件" "" || ok "全部台账报告排除未登记文件"
+expect "全部改动记录报告保留各轮差异" "$page" '全部已记录改动（2 条，2 轮）'
+grep -qF 'src/显示/中文 文件.ts' <<<"$page" && fail "全部改动记录报告混入未登记文件" "" || ok "全部改动记录报告排除未登记文件"
 rm "src/显示/中文 文件.ts" 'src/显示/带"引号.ts' "src/long.ts" "dist/bundle.js"
 [ "$(find .light-work -type d | wc -l | tr -d ' ')" = "1" ] && ok ".light-work 下没有子目录" || fail "出现子目录" "$(find .light-work)"
 git status --porcelain | grep -q ".light-work" && fail ".light-work 不应出现在 git status" "$(git status --porcelain)" || ok ".light-work 已被本地 exclude"
 
-echo "切换分支：自动换成另一份台账"
+echo "切换分支：自动换成另一份改动记录"
 git checkout -qb feature/other
 out=$(hook session-start "{\"cwd\":\"$REPO\"}")
-[ -f .light-work/feature-other.md ] && ok "新分支自动建自己的台账" || fail "新分支台账" "$(ls .light-work)"
+[ -f .light-work/feature-other.md ] && ok "新分支自动建自己的改动记录" || fail "新分支改动记录" "$(ls .light-work)"
 out=$(hook pre-edit "$EDIT"); expect "新分支不带入旧分支的约束" "$out" "还没有 open 条目"
 grep -q "C-001.1" <<<"$out" && fail "旧分支约束泄漏" "$out" || ok "旧分支约束没有泄漏"
 git checkout -qb feature/third
 hook prompt "{\"cwd\":\"$REPO\",\"prompt\":\"改一下\"}" >/dev/null
-[ -f .light-work/feature-third.md ] && ok "会话中途切分支也自动建台账" || fail "中途切分支" "$(ls .light-work)"
+[ -f .light-work/feature-third.md ] && ok "会话中途切分支也自动建改动记录" || fail "中途切分支" "$(ls .light-work)"
 git checkout -q feature/voice
-out=$($L context); expect "切回来还是原来的台账" "$out" "C-003"
+out=$($L context); expect "切回来还是原来的改动记录" "$out" "C-003"
 
 echo "Codex：apply_patch 补丁 / Stop 提醒"
 git checkout -qb feature/codex
