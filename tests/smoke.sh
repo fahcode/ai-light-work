@@ -102,6 +102,10 @@ out=$(hook pre-edit "$EDIT")
 expect "编辑前注入旧条目的约束" "$out" "C-001.1"
 expect "编辑前注入文件约束" "$out" "C-002.1"
 out=$(hook pre-edit "$EDIT"); [ -z "$out" ] && ok "同一约束不重复提示" || fail "重复提示" "$out"
+sed -i.bak 's/C-001.1 legacyFallback 保留，不能删除/C-001.1 legacyFallback 继续供旧客户端使用/' .light-work/feature-voice.md
+rm .light-work/feature-voice.md.bak
+out=$(hook pre-edit "$EDIT"); expect "同编号约束更新后再次提示" "$out" "C-001.1 legacyFallback 继续供旧客户端使用"
+out=$(hook pre-edit "$EDIT"); [ -z "$out" ] && ok "更新后的相同约束继续去重" || fail "更新后重复提示" "$out"
 
 echo "技能：lw-edit 改代码 → 钩子：结束前"
 first_round_base=$($L snapshot)
@@ -207,6 +211,13 @@ for command in review check; do
   done
 done
 out=$($L conflicts --recorded-only); expect "全部检查可核对已收尾条目之间的回退" "$out" "C-003 删除/改写了 C-002"
+historical=$($L check C-003 --json)
+printf 'legacyFallback(1);\nhandleResult("later");\n' > src/later.ts
+[ "$historical" = "$($L check C-003 --json)" ] && ok "历史检查不混入工作区的新引用" || fail "历史引用受工作区影响" "$historical"
+out=$($L check --base "$round_base" --current-entry C-003)
+expect "本轮检查仍包含工作区的新增引用" "$out" "删除了 legacyFallback，但仍有 1 处引用: src/later.ts"
+expect "检查输出引用对应的结束快照" "$out" "引用取自所选范围最后的结束快照"
+rm src/later.ts
 rm src/unrelated.ts
 
 echo "反复修改提醒 / lint 证据规则"
@@ -222,7 +233,8 @@ out=$($L lint || true); expect "拒绝没有证据的验证" "$out" "不是证�
 echo "提交回填 / 自动定稿 / 页面"
 sed -i.bak 's/- 验证: ✓ 应该没问题/- 验证: ✗ 未验证/' .light-work/feature-voice.md && rm -f .light-work/feature-voice.md.bak
 git add -A && git commit -qm wip
-grep -q "C-002 · 2026-11-20 · bug · settled" .light-work/feature-voice.md && ok "提交后自动转 settled" || fail "自动定稿" "$(grep '^###' .light-work/feature-voice.md)"
+grep -q "C-003 · 2026-11-20 · change · settled" .light-work/feature-voice.md && ok "提交与收尾快照相符的条目自动转 settled" || fail "自动定稿" "$(grep '^###' .light-work/feature-voice.md)"
+grep -q "C-002 · 2026-11-20 · bug · open" .light-work/feature-voice.md && ok "同文件但快照不符的条目保留 open" || fail "提交误定稿" "$(grep '^###' .light-work/feature-voice.md)"
 out=$($L lint); expect "定稿后 lint 仍通过" "$out" "改动记录格式正常"
 grep -q "提交: [0-9a-f]\{7\}" .light-work/feature-voice.md && ok "post-commit 回填 SHA" || fail "回填" "$(grep 提交 .light-work/feature-voice.md)"
 out=$($L why src/search/voice.ts:2); expect "why：行 → 提交 → 条目" "$out" "C-003"
@@ -372,5 +384,36 @@ EOF
 out=$(hook prompt "{\"cwd\":\"$REPO\",\"prompt\":\"看看这个函数\"}"); expect "钩子出错后下一条消息告诉 AI" "$out" "上次运行出错（"
 expect "带上出错的位置" "$out" "钩子 stop: boom"
 out=$(hook prompt "{\"cwd\":\"$REPO\",\"prompt\":\"看看这个函数\"}"); grep -qF "上次运行出错" <<<"$out" && fail "错误重复提示" "$out" || ok "错误只告诉一次"
+
+echo "提交回填：同文件的两次局部提交"
+git checkout -qb feature/partial
+hook session-start "{\"cwd\":\"$REPO\"}" >/dev/null
+shared='src/shared settings.ts'
+printf 'export const label = "old";\nexport const timeout = 5;\n' > "$shared"
+git add -- "$shared" && git commit -qm 'add shared settings'
+for entry in C-001 C-002; do
+  cat >> .light-work/feature-partial.md <<EOF
+
+### $entry · 2026-11-20 · change · open · 设置调整
+- 意图: 调整共享配置
+- 文件: $shared
+- 验证: —
+- 级别: L0
+EOF
+done
+first_base=$($L snapshot)
+printf 'export const label = "new";\nexport const timeout = 5;\n' > "$shared"
+$L checkpoint --entry C-001 --base "$first_base" >/dev/null
+second_base=$($L snapshot)
+git add -- "$shared"
+printf 'export const label = "new";\nexport const timeout = 8;\n' > "$shared"
+$L checkpoint --entry C-002 --base "$second_base" >/dev/null
+out=$(git commit -qm 'stage only label' 2>&1)
+expect "只回填实际提交的文案条目" "$out" "已关联到 C-001"
+grep -q 'C-002 · 2026-11-20 · change · open' .light-work/feature-partial.md && ok "仍未提交的超时条目保持 open" || fail "局部提交误定稿" "$out"
+git add -- "$shared"
+out=$(git commit -qm 'stage timeout' 2>&1)
+expect "下一次提交能回填超时条目" "$out" "已关联到 C-002"
+grep -q 'C-002 · 2026-11-20 · change · settled' .light-work/feature-partial.md && ok "超时提交后正常定稿" || fail "第二次提交未定稿" "$out"
 
 echo; echo "全部通过（$pass 项）"

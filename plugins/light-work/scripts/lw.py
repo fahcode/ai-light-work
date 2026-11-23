@@ -641,6 +641,14 @@ def analyze(root, cfg, mode="checkpoint", ref=None, nhunks=4, current_entry=None
         reasons.append("·· 触及改动记录约束 %s（不抬级别，卡片里必须逐条核对）" % ", ".join(c["id"] for c in touched[:8]))
 
     # 影响面：删掉/改了签名的定义，用 git grep 实测还有谁在引用
+    reference_tree = segs[-1][1] if segs else None
+
+    def references(name, output_flag):
+        out = git("grep", output_flag, "-w", "-I", "-e", name, reference_tree,
+                  "--", ".", ":(exclude)%s" % LEDGER_DIR, check=False, cwd=root)
+        prefix = reference_tree + ":"
+        return [line[len(prefix):] for line in out.splitlines() if line.startswith(prefix)]
+
     minus, plus = {}, {}
     for p in eff_files:
         for sign, text in diff[p]["lines"]:
@@ -651,8 +659,7 @@ def analyze(root, cfg, mode="checkpoint", ref=None, nhunks=4, current_entry=None
     resig = sorted(n for n in minus if n in plus)
     impact = []
     for n in (removed + resig)[:8]:
-        out = git("grep", "-n", "-w", "-I", "--untracked", n, "--", ".", ":(exclude)%s" % LEDGER_DIR, check=False, cwd=root)
-        refs = [ln for ln in out.splitlines() if not DEF_RE.search(ln.split(":", 2)[-1])]
+        refs = [ln for ln in references(n, "-n") if not DEF_RE.search(ln.split(":", 2)[-1])]
         fset = sorted(set(ln.split(":", 1)[0] for ln in refs))
         impact.append({"name": n, "kind": "删除" if n in removed else "签名变化", "refs": len(refs),
                        "files": fset[:8], "sample": refs[:3]})
@@ -668,8 +675,7 @@ def analyze(root, cfg, mode="checkpoint", ref=None, nhunks=4, current_entry=None
                 if n and n not in skip and len(n) >= 4 and n not in syms:
                     syms.append(n)
     for n in syms[:8]:
-        out = git("grep", "-l", "-w", "-I", "--untracked", n, "--", ".", ":(exclude)%s" % LEDGER_DIR, check=False, cwd=root)
-        fs = [f for f in out.splitlines() if f and f not in diff and not test_re.search(f)]
+        fs = [f for f in references(n, "-l") if f not in diff and not test_re.search(f)]
         if fs:
             callers.append({"name": n, "files": fs[:5], "n": len(fs)})
 
@@ -701,7 +707,8 @@ def analyze(root, cfg, mode="checkpoint", ref=None, nhunks=4, current_entry=None
         "eff_lines": eff_lines, "eff_files": eff_files, "test_files": test_files, "skipped": skipped,
         "modules": modules, "iface": iface[:12], "new_exports": new_exports[:12], "schema": schema, "config": config,
         "sensitive": {"strong": hi_strong, "weak": hi_weak, "medium": sorted(md_hits)},
-        "impact": impact, "callers": callers, "touched_constraints": touched, "global_constraints": globals_, "unregistered": unregistered,
+        "impact": impact, "callers": callers, "reference_tree": reference_tree,
+        "touched_constraints": touched, "global_constraints": globals_, "unregistered": unregistered,
         "entries": scoped_entries, "hunks": top, "ledger": os.path.relpath(lp, root),
         "evidence": diff if evidence else None,
     }
@@ -867,6 +874,8 @@ def print_analysis(r, show_hunks=True, check_mode=False):
             print("  " + x)
     if r.get("new_exports"):
         print("新增导出: %s" % ", ".join(r["new_exports"]))
+    if r.get("reference_tree") and (check_mode or r.get("impact") or r.get("callers")):
+        print("\n引用取自所选范围最后的结束快照: %s" % r["reference_tree"])
     if r.get("impact"):
         print("\n影响面（git grep 实测，不含定义行）:")
         for it in r["impact"]:
@@ -1087,16 +1096,39 @@ def cmd_backfill(a):
     if not os.path.exists(lp):
         return
     sha = git("rev-parse", "--short", a.commit).strip()
-    files = git("diff-tree", "--no-commit-id", "--name-only", "-r", a.commit).split()
+    files = set(git("diff-tree", "--root", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", a.commit).split("\0")) - {""}
     entries, _ = parse_ledger(lp)
     targets = [e for e in entries if e["type"] != "baseline" and e["status"] != "dropped"
                and (e["status"] == "open" or not e["shas"])
                and any(path_match(f, e["files"]) for f in files) and sha not in e["shas"]]
     if not targets:
         return
+    expected = {e["id"]: {} for e in targets}
+    for round_ in checkpoint_chain():
+        if round_["entry"] not in expected:
+            continue
+        changed = git("diff", "--name-only", "--no-renames", "-z", round_["from"], round_["tree"]).split("\0")
+        for path in filter(None, changed):
+            expected[round_["entry"]][path] = round_["tree"]
+
+    # 字段中的文件仅用于筛选；逐文件核对收尾时的内容，避免暂存部分改动时错误回填。
+    differences = {}
+    tid = set()
+    for entry, paths in expected.items():
+        if files.isdisjoint(paths):
+            continue
+        for path, tree in paths.items():
+            if tree not in differences:
+                differences[tree] = set(git("diff", "--name-only", "--no-renames", "-z", tree, a.commit).split("\0"))
+            if path in differences[tree]:
+                break
+        else:
+            tid.add(entry)
+
+    if not tid:
+        return
     lines = open(lp, encoding="utf-8").read().splitlines()
-    tid = {e["id"] for e in targets}
-    settle = {e["id"] for e in targets if e["status"] == "open" and e["level"] is not None}
+    settle = {e["id"] for e in targets if e["id"] in tid and e["status"] == "open" and e["level"] is not None}
     out, cur, done = [], None, set()
     for i, ln in enumerate(lines):
         m = HEADER_RE.match(ln.strip()) if ln.startswith("### ") else None
@@ -1473,22 +1505,21 @@ def hook_pre_edit(root, data):
     entries, _ = parse_ledger(lp)
     act, _ = active_constraints(entries)
     msgs = []
-    shown = st.get("ctx_shown")
-    if not isinstance(shown, dict):
-        shown = {}
+    cached = st.get("ctx_shown")
+    shown = {key: texts for key, texts in cached.items() if isinstance(texts, dict)} if isinstance(cached, dict) else {}
+    shown.setdefault("*", {})
     glb = [c for c in act if c["global"]]
-    new_glb = [c for c in glb if c["id"] not in shown.get("*", [])]
     for f in files:  # Codex 一个补丁可能同时改好几个文件
+        shown.setdefault(f, {})
         rel = [c for c in act if not c["global"] and path_match(f, c["files"])]
-        new_rel = [c for c in rel if c["id"] not in shown.get(f, [])]
-        if new_rel or new_glb:
+        new = [c for c in glb + rel if shown["*" if c["global"] else f].get(c["id"]) != c["text"]]
+        if new:
             msgs.append("改 %s 前必须保持的约束：" % f)
-            msgs += ["- %s%s %s" % (c["id"], "[全局]" if c["global"] else "", c["text"]) for c in (new_glb + new_rel)[:12]]
-            new_glb = []
-        shown[f] = sorted(set(shown.get(f, [])) | {c["id"] for c in rel})
+            for c in new[:12]:
+                msgs.append("- %s%s %s" % (c["id"], "[全局]" if c["global"] else "", c["text"]))
+                shown["*" if c["global"] else f][c["id"]] = c["text"]
     if msgs:
         msgs.append("这次改动如果会让其中某条明确不成立、而用户没提到，先按 lw-edit 的格式问一句再改。")
-    shown["*"] = sorted(set(shown.get("*", [])) | {c["id"] for c in glb})
     st["ctx_shown"] = shown
     if not [e for e in entries if e["status"] == "open" and e["type"] != "baseline"]:
         msgs.append("还没有 open 条目：先按 lw-record 记下这次修改的意图，再改代码。")
