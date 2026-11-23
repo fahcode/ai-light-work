@@ -4,7 +4,7 @@
 
 | 插件 | 版本 | 一句话 |
 |---|---|---|
-| [light-work](plugins/light-work) | 0.6.6 | 按分支自动维护改动记录：AI 改代码时自动记下你要什么，像靠谱的同事一样做最小改动，改完按复杂度给你看 review 卡片；需要时手动做冲突检查和可视化报告 |
+| [light-work](plugins/light-work) | 0.6.7 | 按分支自动维护改动记录：AI 改代码时自动记下你要什么，像靠谱的同事一样做最小改动，改完按复杂度给你看 review 卡片；需要时手动做冲突检查和可视化报告 |
 
 支持 **Claude Code**、**Codex** 和 **CodeBuddy Code / WorkBuddy**，共用同一份插件（同一套技能、钩子和脚本）。只依赖 Python 3.8+ 和 git。
 

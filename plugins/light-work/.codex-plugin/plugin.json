@@ -1,6 +1,6 @@
 {
   "name": "light-work",
-  "version": "0.6.6",
+  "version": "0.6.7",
   "description": "ai-light-work：按分支自动维护改动记录。改代码时自动记录意图、手术刀式修改（冲突先确认）、按复杂度输出 L0-L3 review 卡片；/lw-review 审阅改动和生成合入报告，/lw-check 检查回归和验证缺口",
   "author": {
     "name": "fahcode"
