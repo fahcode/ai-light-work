@@ -136,7 +136,8 @@ def worktree_tree(root):
     os.close(fd)
     try:
         if os.path.exists(idx):
-            shutil.copyfile(idx, tmp)
+            # 保留索引时间戳，让 Git 重新检查同一时刻的等长改写。
+            shutil.copy2(idx, tmp)
         else:
             os.remove(tmp)
         env = dict(os.environ, GIT_INDEX_FILE=tmp)

@@ -402,8 +402,24 @@ for entry in C-001 C-002; do
 EOF
 done
 first_base=$($L snapshot)
-printf 'export const label = "new";\nexport const timeout = 5;\n' > "$shared"
-$L checkpoint --entry C-001 --base "$first_base" >/dev/null
+git config core.trustctime false
+python3 - "$shared" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+stamp = path.stat().st_mtime_ns
+path.write_text(path.read_text().replace('"old"', '"new"'))
+# 模拟等长改写，文件时间与索引时间相同，Git 需要重新读文件内容。
+os.utime(path, ns=(stamp, stamp))
+os.utime('.git/index', ns=(stamp, stamp))
+PY
+out=$($L checkpoint --entry C-001 --base "$first_base")
+expect "快照捕获索引同一时间的等长改写" "$out" "归属 C-001"
+out=$(git show ":$shared")
+expect "快照保持真实索引原样" "$out" 'label = "old"'
+git config --unset core.trustctime
 second_base=$($L snapshot)
 git add -- "$shared"
 printf 'export const label = "new";\nexport const timeout = 8;\n' > "$shared"
