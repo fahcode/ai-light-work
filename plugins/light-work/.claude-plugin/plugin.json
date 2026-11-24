@@ -1,6 +1,6 @@
 {
   "name": "light-work",
-  "version": "0.6.10",
+  "version": "0.6.11",
   "description": "Branch-local change records, focused edits, and evidence-based reviews. Use lw-review for change and merge reports, and lw-check for regressions and verification gaps.",
   "author": {
     "name": "fahcode"

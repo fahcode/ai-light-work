@@ -1,5 +1,11 @@
 # Changelog
 
+## light-work 0.6.11 · 2026-11-24
+
+- Start automatic recording and review only for authorized development edits, including single-file changes. Read-only work and unrelated writing remain outside the workflow.
+- Tie edit constraints and closeout reminders to an active development round. Detect shell edits from its starting snapshot.
+- Align all four skills with Agent Skills and simplify how they describe triggers, verification, and reports.
+
 ## light-work 0.6.10 · 2026-11-24
 
 - Use the language requested by the user or inferred from the conversation for Check and Review output, including report text and diagrams.

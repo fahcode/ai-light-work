@@ -6,7 +6,7 @@
 
 | 插件 | 版本 | 一句话 |
 |---|---|---|
-| [light-work](plugins/light-work) | 0.6.10 | 按分支自动维护改动记录：AI 改代码时自动记下你要什么，像靠谱的同事一样做最小改动，改完按复杂度给你看 review 卡片；需要时手动做冲突检查和可视化报告 |
+| [light-work](plugins/light-work) | 0.6.11 | 按分支自动维护改动记录：AI 改代码时自动记下你要什么，像靠谱的同事一样做最小改动，改完按复杂度给你看 review 卡片；需要时手动做冲突检查和可视化报告 |
 
 支持 **Claude Code**、**Codex** 和 **CodeBuddy Code / WorkBuddy**，共用同一份插件（同一套技能、钩子和脚本）。只依赖 Python 3.8+ 和 Git。
 
@@ -337,7 +337,7 @@ LW_DEBUG=1 python3 plugins/light-work/scripts/lw.py hook stop < input.json   # �
 ## 已知限制
 
 - 钩子按 Claude Code、Codex、CodeBuddy Code 的插件规范编写，冒烟测试模拟了它们的输入输出（包括 Codex 的 `apply_patch`），还需要在真实会话里观察。CodeBuddy **IDE** 是否支持插件钩子需要确认
-- 编辑钩子只认编辑工具（Claude 的 Edit/Write、Codex 的 apply_patch）。AI 用 shell 命令（`sed -i`、`cat >`）改文件时不会被标记为"本轮有改动"，Stop 不会提示，`/lw-check` 的"未登记改动"能事后发现
+- 改前约束提示由编辑工具触发（如 Claude 的 Edit/Write、Codex 的 apply_patch）。Shell 写入可能绕过改前提示，已开启的开发轮次仍会在收尾时通过 Git diff 检测到这些改动。
 - 敏感词和接口变化的检测是启发式的，会有误报；阈值内置在 `scripts/lw.py` 的 `DEFAULTS` 里
 - 约束按文件和代码对上。跨文件的影响只做一层：`score` 列出"改了内部逻辑的函数被哪些没改的文件按名字引用"，不追调用链、不做类型分析，同名会误报
 - 收尾后如果 merge、rebase 或拉了别人的提交，下一次 `score` 会把这些改动也算进"本轮"，级别可能偏高
