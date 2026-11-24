@@ -1674,132 +1674,174 @@ VIEW_HTML = """<!doctype html>
 <style>
 :root {{
   color-scheme: light dark;
-  --background: #f4f6f9; --panel: #fff; --text: #182431; --muted: #48586b;
-  --border: #d8dfe8; --link: #1756a5; --accent: #e8f1ff;
-  --add: #e6f6ed; --del: #fce9eb;
-  --flow-ink: #124d85; --flow-wash: #eef6ff; --flow-rule: #a4c5e7;
-  --sequence-ink: #593995; --sequence-wash: #f5f0ff; --sequence-rule: #c7b5e9;
-  --architecture-ink: #166653; --architecture-wash: #eaf7f3; --architecture-rule: #9acbbd;
+  --background: #f3f3ef; --panel: #fff; --surface: #f7f8f5; --text: #172321;
+  --muted: #505e58; --border: #d8dfd9; --link: #136354; --accent: #e5f3ed;
+  --add: #e7f6ec; --del: #fbeae8;
+  --flow-ink: #145e50; --flow-wash: #eef7f3; --flow-rule: #adcfc3;
+  --sequence-ink: #4e4786; --sequence-wash: #f4f1fb; --sequence-rule: #cdc4e6;
+  --architecture-ink: #2b537a; --architecture-wash: #eff5fb; --architecture-rule: #b7cde1;
 }}
 @media (prefers-color-scheme: dark) {{
   :root {{
-    --background: #10151d; --panel: #18212d; --text: #e9eff6; --muted: #aabaca;
-    --border: #354454; --link: #9ac5ff; --accent: #203553;
-    --add: #183b30; --del: #472731;
-    --flow-ink: #a4ceff; --flow-wash: #1d3149; --flow-rule: #4b739c;
-    --sequence-ink: #d7c3ff; --sequence-wash: #33274c; --sequence-rule: #78639c;
-    --architecture-ink: #abebd9; --architecture-wash: #193a33; --architecture-rule: #4e8d7e;
+    --background: #131209; --panel: #181818; --surface: #1f1f1f; --text: #f0f3ee;
+    --muted: #b3bcb5; --border: #414943; --link: #a1dfc9; --accent: #203b31;
+    --add: #20362a; --del: #432a29;
+    --flow-ink: #a1dfc9; --flow-wash: #1d3028; --flow-rule: #466b5d;
+    --sequence-ink: #ddd4fc; --sequence-wash: #2f2a3d; --sequence-rule: #655981;
+    --architecture-ink: #bfddfa; --architecture-wash: #233244; --architecture-rule: #4b6380;
   }}
 }}
 * {{ box-sizing: border-box }}
-body {{ margin: 0; background: var(--background); color: var(--text);
-  font: 1rem/1.6 Geist, system-ui, sans-serif }}
-.layout {{ max-width: 92rem; margin: auto; padding: 2rem; display: grid;
-  grid-template-columns: minmax(0, 15rem) minmax(0, 1fr); gap: 2rem }}
-nav {{ position: sticky; top: 2rem; max-height: calc(100vh - 4rem);
-  overflow: auto; align-self: start; padding: .75rem; background: var(--panel);
-  border: 1px solid var(--border); border-radius: .75rem }}
-nav a {{ display: block; padding: .375rem .5rem; overflow-wrap: anywhere;
-  border-radius: .375rem; text-decoration: none; font-size: .875rem }}
-nav a:not(.nav-file) {{ font-weight: 600 }}
-nav .nav-file {{ color: var(--text) }}
-nav .nav-file strong, nav .nav-file small {{ display: block; line-height: 1.35 }}
-nav .nav-file small {{ margin-top: .125rem; font-size: .75rem }}
-a {{ color: var(--link); text-underline-offset: .2em }}
-a:hover {{ background: var(--accent) }}
-a:focus-visible, summary:focus-visible {{ outline: 2px solid var(--link); outline-offset: 2px }}
+[hidden] {{ display: none !important }}
+body {{ margin: 0; background: var(--background); color: var(--text); font: 1rem/1.5 Geist, system-ui, sans-serif }}
+.layout {{ max-width: 86rem; margin-inline: auto; padding: 2.5rem 2rem; display: grid;
+  grid-template-columns: 14rem minmax(0, 1fr); gap: 2rem }}
 main {{ min-width: 0 }}
-header, .panel {{ background: var(--panel); border: 1px solid var(--border);
-  border-radius: .75rem; padding: clamp(1rem, 3vw, 2rem); margin-bottom: 1rem }}
-header {{ border-block-start: .25rem solid var(--link) }}
-h1, h2, h3 {{ line-height: 1.25; text-wrap: balance }}
-h1 {{ font-size: 1.875rem; margin: .25rem 0 .75rem }}
-h2 {{ font-size: 1.25rem; margin: 0 0 .75rem }}
-h3 {{ font-size: 1.125rem }}
+nav {{ position: sticky; top: 2rem; max-height: calc(100vh - 4rem); overflow: auto;
+  align-self: start; padding: 1rem; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 1rem; font-size: .875rem; line-height: 1.25rem }}
+nav a {{ display: block; padding: .5rem; color: var(--text); overflow-wrap: anywhere;
+  border-radius: .5rem; text-decoration: none }}
+nav a[aria-current], nav a:hover {{ background: var(--accent); color: var(--link) }}
+nav .nav-section {{ font-weight: 600 }}
+nav .nav-file strong, nav .nav-file small {{ display: block }}
+nav .nav-file small {{ font-size: .75rem; line-height: 1rem }}
+.file-nav {{ border-top: 1px solid var(--border); margin-top: .75rem; padding-top: .75rem }}
+.file-nav summary {{ padding: .5rem }}
+.file-nav input {{ color: var(--text); background: var(--surface); width: 100%; padding: .5rem;
+  margin: .25rem 0; border: 1px solid var(--border); border-radius: .5rem; font: inherit }}
+.file-nav p {{ padding: 0 .5rem; margin: .5rem 0 }}
+a {{ color: var(--link); text-underline-offset: .2em }}
+a:focus-visible, summary:focus-visible, input:focus-visible {{ outline: 2px solid var(--link); outline-offset: 2px }}
+.overview, .panel {{ background: var(--panel); border: 1px solid var(--border);
+  border-radius: 1rem; padding: clamp(1rem, 3vw, 2rem); margin-bottom: 1rem }}
+.overview {{ background: var(--accent) }}
+h1, h2, h3 {{ text-wrap: balance }}
+h1 {{ font-size: clamp(1.5rem, 4vw, 2.25rem); line-height: 1.15; margin: .25rem 0 .75rem }}
+h2 {{ font-size: 1.25rem; line-height: 1.75rem; margin: 0 0 .75rem }}
+h3 {{ font-size: 1.125rem; line-height: 1.75rem; margin: 0 }}
 p, li {{ text-wrap: pretty }}
+p, li, th, td, dd, .meta, h1, h2, h3 {{ overflow-wrap: anywhere }}
 .meta, small {{ color: var(--muted) }}
-.meta {{ overflow-wrap: anywhere }}
-.facts {{ display: flex; gap: .5rem 1.25rem; flex-wrap: wrap; padding: 0; margin: 1rem 0 0 }}
-.facts li {{ list-style: none; font-weight: 600; padding: .125rem .625rem;
-  border: 1px solid var(--border); border-radius: .375rem; font-variant-numeric: tabular-nums }}
-.overview dl {{ margin: 1rem 0 0; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .375rem 1rem }}
-dt {{ font-weight: 600 }} dd {{ margin: 0; overflow-wrap: anywhere }}
-.report > :first-child {{ margin-top: 0 }}
-blockquote {{ margin: .75rem 0; padding: .5rem 1rem; background: var(--accent);
-  border-inline-start: .25rem solid var(--link) }}
+.meta {{ font-size: .875rem; line-height: 1.25rem }}
+.facts {{ display: flex; gap: .5rem 1rem; flex-wrap: wrap; margin: 0; padding: 0;
+  color: var(--muted); font-size: .875rem; line-height: 1.25rem; font-variant-numeric: tabular-nums }}
+.facts li {{ list-style: none }}
+.record-summary dl {{ margin: 1rem 0 0; display: grid;
+  grid-template-columns: max-content minmax(0, 1fr); gap: .25rem 1rem }}
+dt {{ font-weight: 600 }} dd {{ margin: 0 }}
+.report > * {{ margin-block: 0 .75rem }}
+.report > h2:not(:first-child) {{ margin-block-start: 1.5rem; padding-block-start: 1rem; border-top: 1px solid var(--border) }}
+.report > :first-child + p {{ font-size: 1.125rem; line-height: 1.75rem }}
+.report > :last-child {{ margin-bottom: 0 }}
+blockquote {{ padding: .75rem; background: var(--accent); border-radius: .5rem }}
 code, pre, .numbers {{ font-family: ui-monospace, SFMono-Regular, Consolas, monospace }}
 pre {{ margin: 0; overflow: auto; white-space: pre; tab-size: 4 }}
-.report pre, #ledger-raw pre {{ background: var(--background); padding: .75rem }}
-.table {{ overflow: auto }} table {{ width: 100%; border-collapse: collapse }}
-th, td {{ text-align: left; padding: .5rem .75rem; border: 1px solid var(--border) }}
+.report pre, #ledger-raw pre {{ background: var(--surface); padding: .75rem }}
+.table {{ overflow: auto; border: 1px solid var(--border); border-radius: .5rem }}
+table {{ width: 100%; border-collapse: collapse }}
+th, td {{ text-align: left; vertical-align: top; padding: .5rem .75rem; border-bottom: 1px solid var(--border) }}
+th {{ background: var(--surface) }}
+tr:last-child td {{ border-bottom: 0 }}
 summary {{ cursor: pointer; font-weight: 600; overflow-wrap: anywhere }}
+.evidence-heading {{ display: flex; align-items: baseline; justify-content: space-between; gap: .75rem }}
 .file {{ margin: .75rem 0; border: 1px solid var(--border); border-radius: .5rem }}
-.file summary {{ padding: .75rem; background: var(--background) }}
+.file summary {{ padding: .75rem }}
+.file[open] summary {{ background: var(--surface); border-bottom: 1px solid var(--border) }}
 .file > p {{ padding-inline: .75rem }}
 .file .meta {{ font-weight: 400; margin-inline-start: .75rem }}
-.hunk {{ scroll-margin-top: 1rem; padding-block: .5rem }}
+.hunk {{ padding-block: .5rem }}
 .hunk + .hunk {{ border-top: 1px solid var(--border) }}
-.hunk header {{ font: .875rem/1.5 ui-monospace, monospace; margin: 0; border: 0;
-  padding: .375rem .75rem; background: var(--accent); overflow-wrap: anywhere }}
-.hunk pre {{ font-size: .875rem; line-height: 1.5 }}
+.hunk header {{ font: .875rem/1.25rem ui-monospace, monospace; padding: .5rem .75rem;
+  background: var(--surface); overflow-wrap: anywhere }}
+.hunk pre {{ font-size: .875rem; line-height: 1.25rem }}
 .line {{ display: block; min-width: max-content; padding-inline-end: 1rem }}
 .line.add {{ background: var(--add) }} .line.del {{ background: var(--del) }}
-.line {{ scroll-margin-top: 1rem }}
-.omitted {{ padding: .375rem .75rem; color: var(--muted); background: var(--background) }}
-.numbers {{ display: inline-block; min-width: 12ch; padding-inline: .5rem;
-  color: var(--muted); user-select: none }}
-:target {{ outline: 2px solid var(--link); outline-offset: 2px }}
-.flow {{ display: flex; gap: 1rem; flex-wrap: wrap; padding: 0; list-style: none;
-  counter-reset: step }}
-.flow li {{ padding: .5rem .75rem; border-inline-start: .25rem solid var(--link);
-  background: var(--accent); max-width: 22rem; counter-increment: step }}
+.omitted {{ padding: .5rem .75rem; color: var(--muted); background: var(--surface) }}
+.numbers {{ display: inline-block; min-width: 12ch; padding-inline: .5rem; color: var(--muted); user-select: none }}
+:target {{ outline: 2px solid var(--link); outline-offset: 2px; scroll-margin-block: 1rem }}
+.flow {{ display: flex; gap: .75rem; flex-wrap: wrap; padding: 0; list-style: none; counter-reset: step }}
+.flow li {{ padding: .5rem .75rem; border-radius: .5rem; background: var(--accent); counter-increment: step }}
 .flow li::before {{ content: counter(step) ". "; color: var(--link); font-weight: 600 }}
 .diagram {{ --diagram-ink: var(--flow-ink); --diagram-wash: var(--flow-wash); --diagram-rule: var(--flow-rule);
-  margin: 1rem 0; padding: 1rem; border: 1px solid var(--diagram-rule);
+  margin: 0 0 1rem; padding: 1rem; border: 1px solid var(--diagram-rule);
   border-radius: .75rem; background: var(--diagram-wash) }}
 .diagram.sequence {{ --diagram-ink: var(--sequence-ink); --diagram-wash: var(--sequence-wash);
   --diagram-rule: var(--sequence-rule) }}
 .diagram.architecture {{ --diagram-ink: var(--architecture-ink); --diagram-wash: var(--architecture-wash);
   --diagram-rule: var(--architecture-rule) }}
-.diagram figcaption {{ margin-bottom: .875rem; padding-bottom: .5rem;
-  color: var(--diagram-ink); border-bottom: 1px solid var(--diagram-rule); font-weight: 600 }}
+.diagram figcaption {{ margin-bottom: .75rem; color: var(--diagram-ink); font-weight: 600 }}
 .diagram ol, .diagram ul {{ display: grid; gap: .5rem; margin: 0; padding: 0; list-style: none }}
-.diagram .edge {{ display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) minmax(0, 1fr);
-  gap: .5rem; align-items: center; overflow-wrap: anywhere }}
+.diagram .edge {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem;
+  align-items: center; overflow-wrap: anywhere }}
 .diagram .node {{ background: var(--panel); border: 1px solid var(--diagram-rule);
-  border-radius: .5rem; padding: .375rem .625rem; text-align: center; font-weight: 600 }}
-.diagram .connector {{ color: var(--diagram-ink); text-align: center; font-size: .875rem }}
-.diagram .arrow {{ display: flex; align-items: center; gap: .25rem;
-  line-height: 1; font-size: 1.25rem }}
+  border-radius: .5rem; padding: .5rem .75rem; font-weight: 600 }}
+.diagram .connector {{ color: var(--diagram-ink); text-align: center; font-size: .875rem; line-height: 1.25rem }}
+.diagram .arrow {{ display: flex; align-items: center; gap: .25rem; font-size: 1.25rem; line-height: 1.25rem }}
 .diagram .arrow::before {{ content: ""; flex: 1; border-top: 1px solid currentColor }}
 .sequence ol {{ counter-reset: message }}
 .sequence .edge {{ counter-increment: message }}
 .sequence .connector::before {{ content: counter(message) ". "; font-weight: 600 }}
-.architecture .groups {{ gap: .75rem }}
+.flowchart .group {{ display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: .5rem; align-items: center }}
+.diagram .group .node {{ min-width: 0; overflow-wrap: anywhere }}
+.diagram .group .edge {{ grid-template-columns: repeat(2, minmax(0, 1fr)) }}
 .architecture .group {{ border: 1px solid var(--diagram-rule); background: var(--panel);
   border-radius: .5rem; padding: .75rem }}
-.architecture h3 {{ margin: 0 0 .5rem; color: var(--diagram-ink) }}
-.architecture .edge {{ grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) }}
+.architecture h3 {{ margin-bottom: .5rem; color: var(--diagram-ink) }}
 @media (max-width: 48rem) {{
   .layout {{ display: block; padding: .75rem }}
-  nav {{ position: static; max-height: 10rem; margin-bottom: .75rem; border: 1px solid var(--border) }}
+  nav {{ position: static; max-height: 14rem; margin-bottom: .75rem }}
+  .nav-sections {{ display: flex; flex-wrap: wrap; gap: .25rem }}
+  .flowchart .group {{ grid-template-columns: minmax(0, 1fr); gap: .25rem }}
+  .flowchart .group + .group {{ margin-top: .5rem }}
+  .table th, .table td {{ min-width: 7rem }}
 }}
 </style></head>
 <body><div class="layout">
 <nav aria-label="报告导航">{nav}</nav>
 <main>
-<header class="overview"><div class="meta">{scope}</div><h1>{title}</h1>{facts}{overview}</header>
+<header class="overview"><div class="meta">{scope}</div><h1>{title}</h1>{facts}</header>
 {report}
 {evidence}
+{overview}
 <details class="panel" id="ledger-raw"><summary>改动记录原文</summary><pre>{ledger}</pre></details>
 </main></div>
 <script>
 function reveal() {{
-  const target = document.getElementById(location.hash.slice(1));
+  const hash = location.hash || (document.getElementById('report') ? '#report' : '#evidence');
+  const target = document.getElementById(hash.slice(1));
+  const file = target?.closest('.file');
+  const section = target?.id === 'report' ? target.querySelector('h2[id]') : target;
+  const active = '#' + (file?.id || section?.id || target?.id);
+  document.querySelectorAll('nav a').forEach(link => {{
+    if (link.hash === active) link.setAttribute('aria-current', 'location');
+    else link.removeAttribute('aria-current');
+  }});
+  if (!location.hash) return;
   if (!target) return;
   const details = target.closest('details');
   if (details) details.open = true;
+  target.setAttribute('tabindex', '-1');
+  target.focus({{preventScroll: true}});
   target.scrollIntoView();
+}}
+const filter = document.getElementById('file-filter');
+if (filter) {{
+  const links = Array.from(document.querySelectorAll('.nav-file'));
+  const empty = document.getElementById('file-filter-empty');
+  filter.hidden = false;
+  if (matchMedia('(max-width: 48rem)').matches) filter.closest('details').open = false;
+  function filterFiles() {{
+    const query = filter.value.trim().toLowerCase();
+    let matches = 0;
+    links.forEach(link => {{
+      link.hidden = !link.getAttribute('aria-label').toLowerCase().includes(query);
+      if (!link.hidden) matches++;
+    }});
+    empty.hidden = matches !== 0;
+  }}
+  filter.addEventListener('input', filterFiles);
+  filterFiles();
 }}
 window.addEventListener('hashchange', reveal);
 document.addEventListener('click', event => {{
@@ -1942,16 +1984,16 @@ def render_diagram(kind, source, inline):
         direction = '<span class="connector">' + inline(label) + '<span class="arrow" aria-label="指向">→</span></span>'
         return '<li class="edge">' + start + direction + '<span class="node">' + inline(target) + '</span></li>'
 
-    if kind == "architecture":
+    if kind in ("architecture", "flow"):
         groups = {}
         for origin, target, label in edges:
             groups.setdefault(origin, []).append(edge("", target, label))
+        source = '<h3>{}</h3>' if kind == "architecture" else '<span class="node">{}</span>'
         body = '<ul class="groups">' + "".join(
-            '<li class="group"><h3>' + inline(origin) + '</h3><ul>' + "".join(items) + '</ul></li>'
+            '<li class="group">' + source.format(inline(origin)) + '<ul>' + "".join(items) + '</ul></li>'
             for origin, items in groups.items()) + '</ul>'
     else:
-        tag = "ol" if kind == "sequence" else "ul"
-        body = '<' + tag + '>' + "".join(edge(*item) for item in edges) + '</' + tag + '>'
+        body = '<ol>' + "".join(edge(*item) for item in edges) + '</ol>'
     caption = {"flow": "流程图", "sequence": "交互图", "architecture": "架构图"}[kind]
     variant = "flowchart" if kind == "flow" else kind
     return f'<figure class="diagram {variant}"><figcaption>{caption}</figcaption>{body}</figure>'
@@ -1962,7 +2004,7 @@ def render_report(report, locations):
     def inline(text):
         return report_inline(text, locations)
 
-    blocks = []
+    blocks, headings = [], []
     for i, part in enumerate(re.split(r"(?m)^```([^\n]*)\n(.*?)^```[ \t]*$", report, flags=re.S), 0):
         if i % 3 == 1:
             language = part.strip()
@@ -1986,7 +2028,9 @@ def render_report(report, locations):
                     continue
                 heading = re.match(r"^#{1,6} (.+)$", lines[0])
                 if heading:
-                    blocks.append("<h2>" + inline(heading[1]) + "</h2>")
+                    section_id = "section-%d" % (len(headings) + 1)
+                    headings.append((section_id, re.sub(r"`|\*\*", "", heading[1])))
+                    blocks.append(f'<h2 id="{section_id}">' + inline(heading[1]) + "</h2>")
                     lines = lines[1:]
                 if not lines:
                     continue
@@ -2005,13 +2049,14 @@ def render_report(report, locations):
                     blocks.append('<div class="table"><table>' + "".join(table) + "</table></div>")
                 else:
                     blocks.append("<p>" + "<br>".join(inline(line) for line in lines) + "</p>")
-    return "\n".join(blocks)
+    return "\n".join(blocks), headings
 
 
 def review_page(title, branch, report, ledger, analysis):
     files = analysis["evidence"] if analysis else {}
     skipped = set(analysis["skipped"]) if analysis else set()
-    nav, panels, locations = render_evidence(files, skipped, report_references(report))
+    file_nav, panels, locations = render_evidence(files, skipped, report_references(report))
+    sections = []
     facts = overview = ""
     scope = branch
     if analysis:
@@ -2025,16 +2070,30 @@ def review_page(title, branch, report, ledger, analysis):
             fields = {"意图": entry["fields"].get("意图"), "验证": " ｜ ".join(entry["verification_results"])}
             values = [f"<dt>{key}</dt><dd>{escape(value)}</dd>" for key, value in fields.items() if value]
             if values:
-                overview = "<dl>" + "".join(values) + "</dl>"
+                overview = ('<details class="panel record-summary" id="record-summary">'
+                            '<summary>记录中的意图与验证</summary><dl>' + "".join(values) + "</dl></details>")
     if report:
-        nav = '<a href="#report">审阅结论</a>' + nav
-        report = '<section class="panel report" id="report">' + render_report(report, locations) + "</section>"
+        content, headings = render_report(report, locations)
+        sections.extend(headings or [("report", "审阅结论")])
+        report = '<section class="panel report" id="report">' + content + "</section>"
     evidence = ""
     if analysis:
-        nav += '<a href="#evidence">全部代码证据</a>'
-        evidence = '<section class="panel" id="evidence"><h2>代码证据</h2>' + (
+        sections.append(("evidence", "代码证据"))
+        back = '<a href="#report">返回审阅</a>' if report else ""
+        evidence = ('<section class="panel" id="evidence"><div class="evidence-heading"><h2>代码证据</h2>'
+                    + back + '</div>') + (
             panels or "<p>这个范围没有文件差异。</p>") + "</section>"
-    nav += '<a href="#ledger-raw">改动记录原文</a>'
+    if overview:
+        sections.append(("record-summary", "记录中的意图与验证"))
+    sections.append(("ledger-raw", "改动记录原文"))
+    nav = '<div class="nav-sections">' + "".join(
+        f'<a class="nav-section" href="#{section_id}">{escape(label)}</a>' for section_id, label in sections
+    ) + '</div>'
+    if file_nav:
+        nav += ('<details class="file-nav" open><summary>按文件查看</summary>'
+                '<input id="file-filter" type="search" aria-label="筛选文件" placeholder="筛选文件" hidden>'
+                '<p id="file-filter-empty" class="meta" role="status" hidden>没有匹配的文件</p>'
+                + file_nav + "</details>")
     # 展示旧文件时统一标题，原文件和历史条目留在原处。
     ledger = re.sub(r"\A# 变更台账(?= · )", "# 改动记录", ledger)
     return VIEW_HTML.format(title=escape(title), scope=escape(scope), facts=facts, overview=overview,

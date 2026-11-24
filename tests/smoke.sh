@@ -275,17 +275,23 @@ cat <<'LW_REPORT' | $L view --scope C-002 --title '审阅 <范围>' >/dev/null
 ```
 LW_REPORT
 page=$(cat .light-work/feature-voice.html)
-overview=${page%%</header>*}
+overview=${page#*id=\"record-summary\">}
+overview=${overview%%</details>*}
 expect "报告概览显示实际执行结果" "$overview" "fixture-check → 断言失败"
 grep -qF "未做真机" <<<"$overview" && fail "报告概览带入未执行项目" "$overview" || ok "报告概览跳过未执行项目"
 expect "旧文件用新标题展示" "$page" "# 改动记录 · feature/voice"
 grep -q '^# 变更台账' .light-work/feature-voice.md && ok "旧记录文件保持原样" || fail "写入了旧记录文件" ""
 expect "改前改后在网页中成对显示" "$page" "<th>改前</th><th>改后</th>"
 expect "指定条目报告显示范围" "$page" 'C-002 的 1 轮修改'
+expect "审阅章节导航指向对应标题" "$page" '<a class="nav-section" href="#section-1">关键改动</a>'
+expect "审阅章节有独立定位" "$page" '<h2 id="section-1">关键改动</h2>'
+expect "证据文件提供离线筛选" "$page" 'id="file-filter" type="search"'
+expect "证据正文可返回审阅" "$page" '<a href="#report">返回审阅</a>'
 expect "路径行号链接到真实补丁行" "$page" 'href="#file-1-hunk-1-line-3"><code>src/search/voice.ts:3</code>'
 expect "跳转目标存在" "$page" 'id="file-1-hunk-1-line-3"'
 expect "离线步骤图" "$page" '<ol class="flow">'
 expect "离线分支流程图" "$page" '<figure class="diagram flowchart">'
+expect "同一来源共享流程图节点" "$page" '<li class="group"><span class="node">检查输入</span><ul>'
 expect "离线交互图" "$page" '<figure class="diagram sequence">'
 expect "离线架构图" "$page" '<figure class="diagram architecture">'
 expect "改动记录原文默认折叠" "$page" '<details class="panel" id="ledger-raw">'
