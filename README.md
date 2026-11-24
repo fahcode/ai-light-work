@@ -6,7 +6,7 @@ Light Work keeps track of what you asked an AI coding assistant to change and wh
 
 | Plugin | Version | Hosts |
 |---|---|---|
-| [light-work](plugins/light-work) | 0.6.9 | Claude Code, Codex, and CodeBuddy Code / WorkBuddy |
+| [light-work](plugins/light-work) | 0.6.10 | Claude Code, Codex, and CodeBuddy Code / WorkBuddy |
 
 Requires Python 3.8+ and Git. The plugin works across languages and frameworks and uses the project's own verification commands.
 
@@ -89,6 +89,7 @@ python3 ~/.light-work/lw.py why src/example.py:42
 - `.light-work/<branch>.html` is the latest generated report for the branch. Open it directly from disk.
 - `refs/light-work/start/` and `refs/light-work/cp/` retain the starting tree and each completed round. They are local refs.
 - New records use English field labels. Existing Chinese records and mixed-language records remain readable. When updating an existing entry, keep its field labels and the language of its content.
+- The assistant chooses the language of its Review and Check from the conversation. Offline report labels support English and Simplified Chinese, with English as the fallback. Source evidence stays as supplied.
 - The Stop hook reminds the assistant about unfinished edits and allows the session to end. Shell writes may bypass edit detection. Reference matching and complexity levels are heuristics. Real tests and human review still establish whether the change is ready.
 
 ## Development

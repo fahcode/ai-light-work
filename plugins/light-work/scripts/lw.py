@@ -383,7 +383,7 @@ def change_entries(entries):
     return [e for e in entries if e["type"] != "baseline" and e["status"] != "dropped"]
 
 
-def entry_ranges(entries, mode, ref):
+def entry_ranges(entries, mode, ref, text=str):
     selected = change_entries(entries)
     if mode == "entry":
         if ref is None and selected:
@@ -401,33 +401,33 @@ def entry_ranges(entries, mode, ref):
         if missing:
             die("%s has no checkpoint. Its diff is unavailable." % ref)
         count = len(rounds)
-        label = "%s (%d completed round%s)" % (ref, count, "" if count == 1 else "s")
+        label = text("%s (%d completed round)" if count == 1 else "%s (%d completed rounds)") % (ref, count)
     else:
-        label = "All recorded changes (%d entries, %d rounds)" % (len(recorded), len(rounds))
+        label = text("All recorded changes (%d entries, %d rounds)") % (len(recorded), len(rounds))
         if missing:
-            label += " · Missing checkpoints: " + ", ".join(missing)
+            label += " · " + text("Missing checkpoints: %s") % ", ".join(missing)
     return [(c["from"], c["tree"]) for c in rounds], label, selected
 
 
-def resolve_range(root, cfg, mode, ref=None):
+def resolve_range(root, cfg, mode, ref=None, text=str):
     """Return the ranges and label for the worktree diff."""
     br = current_branch()
     cur = worktree_tree(root)
     if mode == "base":
         if not git_ok("rev-parse", "--verify", "-q", ref):
             die("Cannot find ref: %s" % ref)
-        return [(git("rev-parse", ref).strip(), cur)], "%s..worktree" % ref
+        return [(git("rev-parse", ref).strip(), cur)], text("%s..worktree") % ref
     if mode == "branch":
         base = detect_base(cfg)
         mb = merge_base(base)
         if mb:
-            return [(mb, cur)], "Full branch (%s merge base %s..worktree)" % (base, mb[:7])
-        return [(head_or_empty(), cur)], "Cannot find %s. Using HEAD..worktree." % base
+            return [(mb, cur)], text("Full branch (%s merge base %s..worktree)") % (base, mb[:7])
+        return [(head_or_empty(), cur)], text("Cannot find %s. Using HEAD..worktree.") % base
     if mode == "ledger":
         sr = start_ref(br)
         if git_ok("rev-parse", "--verify", "-q", sr):
             return [(git("rev-parse", sr + "^{tree}").strip(), cur)], "Change record (starting snapshot..worktree)"
-        return resolve_range(root, cfg, "branch")[0], "No starting snapshot. Using the full branch."
+        return resolve_range(root, cfg, "branch", text=text)[0], "No starting snapshot. Using the full branch."
     # Default checkpoint range.
     if git_ok("rev-parse", "--verify", "-q", cp_ref(br)):
         return [(git("rev-parse", cp_ref(br) + "^{tree}").strip(), cur)], "Last checkpoint..worktree"
@@ -511,19 +511,19 @@ def module_key(path, depth):
     return "/".join(parts[:depth]) if parts else "."
 
 
-def analyze(root, cfg, mode="checkpoint", ref=None, nhunks=4, current_entry=None, evidence=False):
+def analyze(root, cfg, mode="checkpoint", ref=None, nhunks=4, current_entry=None, evidence=False, scope_text=str):
     lp = ledger_path(root)
     entries, _ = parse_ledger(lp)
     scoped_entries = entries
     if mode in ("entry", "all_entries"):
-        segs, label, scoped_entries = entry_ranges(entries, mode, ref)
+        segs, label, scoped_entries = entry_ranges(entries, mode, ref, scope_text)
     else:
-        segs, label = resolve_range(root, cfg, mode, ref)
+        segs, label = resolve_range(root, cfg, mode, ref, scope_text)
         if current_entry:
             scoped_entries = [e for e in change_entries(entries) if e["id"] == current_entry]
             if not scoped_entries:
                 die("No active change record found for %s." % current_entry)
-            label = "%s (current round)" % current_entry
+            label = scope_text("%s (current round)") % current_entry
     parts = []
     for base, end in segs:
         part = parse_diff(root, base, end)
@@ -1678,10 +1678,65 @@ def cmd_hook(a):
     sys.exit(0)
 
 
+# Only renderer-owned labels are translated. The caller supplies the authored report.
+REPORT_ZH = {
+    "%s (current round)": "%s 的本轮改动",
+    "%s (%d completed round)": "%s 的 %d 轮已收尾改动",
+    "%s (%d completed rounds)": "%s 的 %d 轮已收尾改动",
+    "All recorded changes (%d entries, %d rounds)": "全部已记录改动（%d 条，%d 轮）",
+    "Missing checkpoints: %s": "缺少收尾点：%s",
+    "%s..worktree": "%s..工作区",
+    "Full branch (%s merge base %s..worktree)": "全分支（%s 合并基点 %s..工作区）",
+    "Cannot find %s. Using HEAD..worktree.": "找不到 %s，使用 HEAD..工作区。",
+    "Change review": "改动审阅",
+    "Report navigation": "报告导航",
+    "Original change record": "原始改动记录",
+    "Recorded intent and verification": "记录中的意图与验证",
+    "Intent": "意图",
+    "Verification": "验证",
+    "Review summary": "审阅结论",
+    "Code evidence": "代码证据",
+    "Back to review": "返回审阅",
+    "No file changes in this scope.": "所选范围没有文件改动。",
+    "Browse files": "按文件浏览",
+    "Filter files": "筛选文件",
+    "No matching files": "没有匹配的文件",
+    "%d file": "%d 个文件",
+    "%d files": "%d 个文件",
+    "Binary file": "二进制文件",
+    "Patch omitted. File totals are available above.": "已省略补丁，上方可查看文件统计。",
+    "Omitted %d lines": "省略 %d 行",
+    "Omitted %d trailing lines": "省略末尾 %d 行",
+    "Line truncated": "此行已截断",
+    "Old and new line numbers and patch": "新旧行号和补丁",
+    "No text patch.": "无文本补丁。",
+    "%d more hunks. Use Git for the full diff.": "另有 %d 个改动片段，可用 Git 查看完整 diff。",
+    "Points to": "指向",
+    "Flowchart": "流程图",
+    "Sequence diagram": "时序图",
+    "Dependency diagram": "依赖图",
+    "Mermaid source": "Mermaid 源码",
+}
+
+
+def language_tag(value):
+    if not re.fullmatch(r"(?:[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*|[ix](?:-[A-Za-z0-9]{1,8})+)", value, re.I):
+        raise argparse.ArgumentTypeError("Use a language tag such as en, zh-Hans or fr-CA.")
+    return value
+
+
+def report_locale(lang):
+    parts = lang.lower().split("-")
+    if parts[0] == "zh":
+        if len(parts) == 1 or parts[1] not in ("hant", "tw", "hk", "mo"):
+            return "zh-Hans", lambda message: REPORT_ZH.get(message, message)
+    return "en", str
+
+
 VIEW_HTML = """<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
+<html lang="{lang}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{title}</title>
+<title{title_attr}>{title}</title>
 <style>
 :root {{
   color-scheme: light dark;
@@ -1809,13 +1864,13 @@ summary {{ cursor: pointer; font-weight: 600; overflow-wrap: anywhere }}
 }}
 </style></head>
 <body><div class="layout">
-<nav aria-label="Report navigation">{nav}</nav>
+<nav aria-label="{navigation}"{ui_attr}>{nav}</nav>
 <main>
-<header class="overview"><div class="meta">{scope}</div><h1>{title}</h1>{facts}</header>
+<header class="overview"><div class="meta"{ui_attr}>{scope}</div><h1{title_attr}>{title}</h1>{facts}</header>
 {report}
 {evidence}
 {overview}
-<details class="panel" id="ledger-raw"><summary>Original change record</summary><pre>{ledger}</pre></details>
+<details class="panel" id="ledger-raw"><summary{ui_attr}>{record_label}</summary><pre translate="no">{ledger}</pre></details>
 </main></div>
 <script>
 function reveal() {{
@@ -1902,20 +1957,21 @@ def patch_excerpt(hunk, references, limit=40):
     return [(i + 1, rows[i]) for i in sorted(selected)]
 
 
-def render_evidence(files, skipped, references):
+def render_evidence(files, skipped, references, text):
     nav, panels, locations = [], [], {}
     for i, (path, diff) in enumerate(sorted(files.items()), 1):
         file_id = "file-%d" % i
         label = escape(path)
         folder, _, name = path.rpartition("/")
         directory = f"<small>{escape(folder)}</small>" if folder else ""
-        nav.append(f'<a class="nav-file" href="#{file_id}" aria-label="{label}">'
+        nav.append(f'<a class="nav-file" href="#{file_id}" aria-label="{label}" translate="no">'
                    f'<strong>{escape(name)}</strong>{directory}</a>')
         locations[path] = (file_id, {})
-        counts = "Binary file" if diff["binary"] else "+%d / −%d" % (diff["add"], diff["del"])
+        counts = text("Binary file") if diff["binary"] else "+%d / −%d" % (diff["add"], diff["del"])
         if path in skipped:
-            panels.append(f'<details class="file" id="{file_id}"><summary><code>{label}</code>'
-                          f'<span class="meta">{counts}</span></summary><p>Patch omitted. File totals are available above.</p></details>')
+            panels.append(f'<details class="file" id="{file_id}"><summary><code translate="no">{label}</code>'
+                          f'<span class="meta">{counts}</span></summary>'
+                          f'<p>{text("Patch omitted. File totals are available above.")}</p></details>')
             continue
         cited = references.get(path, set())
         indexed = list(enumerate(diff["hunks"], 1))
@@ -1929,9 +1985,9 @@ def render_evidence(files, skipped, references):
             hunk_id = "%s-hunk-%d" % (file_id, j)
             rows = []
             preceding = 0
-            for n, (kind, old, new, text) in patch_excerpt(hunk, cited):
+            for n, (kind, old, new, line) in patch_excerpt(hunk, cited):
                 if n > preceding + 1:
-                    rows.append(f'<span class="line omitted">Omitted {n - preceding - 1} lines</span>')
+                    rows.append('<span class="line omitted">%s</span>' % (text("Omitted %d lines") % (n - preceding - 1)))
                 preceding = n
                 row_id = "%s-line-%d" % (hunk_id, n)
                 if old is not None:
@@ -1939,17 +1995,21 @@ def render_evidence(files, skipped, references):
                 if new is not None:
                     locations[path][1].setdefault(new, []).append((True, j, row_id))
                 numbers = "%s %s" % (str(old or "").rjust(5), str(new or "").rjust(5))
-                tail = '<span class="meta"> … (line truncated)</span>' if len(text) > 600 else ""
-                rows.append(f'<span class="line {kind}" id="{row_id}"><span class="numbers">{numbers}</span>{escape(text[:600])}{tail}</span>')
+                tail = f'<span class="meta"> … ({text("Line truncated")})</span>' if len(line) > 600 else ""
+                rows.append(f'<span class="line {kind}" id="{row_id}"><span class="numbers">{numbers}</span>{escape(line[:600])}{tail}</span>')
             if preceding < len(hunk["body"]):
-                rows.append(f'<span class="line omitted">Omitted {len(hunk["body"]) - preceding} trailing lines</span>')
+                rows.append('<span class="line omitted">%s</span>' %
+                            (text("Omitted %d trailing lines") % (len(hunk["body"]) - preceding)))
             body = "".join(rows)
             header = escape(hunk["revision"] + "  " + hunk["header"])
-            hunks.append(f'<section class="hunk" id="{hunk_id}"><header>{header}</header><pre aria-label="Old and new line numbers and patch">{body}</pre></section>')
-        body = "".join(hunks) or "<p>No text patch.</p>"
+            patch_label = text("Old and new line numbers and patch")
+            hunks.append(f'<section class="hunk" id="{hunk_id}"><header>{header}</header>'
+                         f'<pre translate="no" aria-label="{patch_label}">{body}</pre></section>')
+        body = "".join(hunks) or f'<p>{text("No text patch.")}</p>'
         if len(selected) < len(indexed):
-            body += f'<p class="meta">{len(indexed) - len(selected)} more hunks. Use Git for the full diff.</p>'
-        panels.append(f'<details class="file" id="{file_id}"><summary><code>{label}</code>'
+            body += '<p class="meta">%s</p>' % (
+                text("%d more hunks. Use Git for the full diff.") % (len(indexed) - len(selected)))
+        panels.append(f'<details class="file" id="{file_id}"><summary><code translate="no">{label}</code>'
                       f'<span class="meta">{counts}</span></summary>{body}</details>')
     return "".join(nav), "".join(panels), locations
 
@@ -1959,7 +2019,7 @@ def report_inline(text, locations):
     for i, part in enumerate(parts):
         if part.startswith("`") and part.endswith("`") and len(part) > 1:
             value = part[1:-1]
-            code = "<code>" + escape(value) + "</code>"
+            code = '<code translate="no">' + escape(value) + "</code>"
             match = re.fullmatch(r"(.+?):(\d+)(?:-\d+)?", value)
             path = match[1] if match else value
             if path in locations:
@@ -1976,7 +2036,7 @@ def report_inline(text, locations):
     return "".join(parts)
 
 
-def render_diagram(kind, source, inline):
+def render_diagram(kind, source, inline, text, ui_attr):
     lines = [line.strip() for line in source.splitlines() if line.strip()]
     if kind == "flow" and not any(" -> " in line for line in lines):
         return '<ol class="flow">' + "".join("<li>" + inline(line) + "</li>" for line in lines) + "</ol>"
@@ -1992,7 +2052,8 @@ def render_diagram(kind, source, inline):
 
     def edge(origin, target, label):
         start = '<span class="node">' + inline(origin) + '</span>' if origin else ""
-        direction = '<span class="connector">' + inline(label) + '<span class="arrow" aria-label="Points to">→</span></span>'
+        direction = ('<span class="connector">' + inline(label)
+                     + f'<span class="arrow" aria-label="{text("Points to")}"{ui_attr}>→</span></span>')
         return '<li class="edge">' + start + direction + '<span class="node">' + inline(target) + '</span></li>'
 
     if kind in ("architecture", "flow"):
@@ -2007,13 +2068,13 @@ def render_diagram(kind, source, inline):
         body = '<ol>' + "".join(edge(*item) for item in edges) + '</ol>'
     caption = {"flow": "Flowchart", "sequence": "Sequence diagram", "architecture": "Dependency diagram"}[kind]
     variant = "flowchart" if kind == "flow" else kind
-    return f'<figure class="diagram {variant}"><figcaption>{caption}</figcaption>{body}</figure>'
+    return f'<figure class="diagram {variant}"><figcaption{ui_attr}>{text(caption)}</figcaption>{body}</figure>'
 
 
-def render_report(report, locations):
+def render_report(report, locations, text, ui_attr):
     """Render the report's Markdown subset, escaping raw HTML."""
-    def inline(text):
-        return report_inline(text, locations)
+    def inline(value):
+        return report_inline(value, locations)
 
     blocks, headings = [], []
     for i, part in enumerate(re.split(r"(?m)^```([^\n]*)\n(.*?)^```[ \t]*$", report, flags=re.S), 0):
@@ -2021,17 +2082,18 @@ def render_report(report, locations):
             language = part.strip()
         elif i % 3 == 2:
             if language in ("flow", "sequence", "architecture"):
-                blocks.append(render_diagram(language, part, inline))
+                blocks.append(render_diagram(language, part, inline, text, ui_attr))
             elif language == "mermaid":
-                blocks.append("<details><summary>Mermaid source</summary><pre>" + escape(part) + "</pre></details>")
+                blocks.append(f'<details><summary{ui_attr}>{text("Mermaid source")}</summary>'
+                              + '<pre translate="no">' + escape(part) + "</pre></details>")
             elif language == "diff":
                 rows = []
                 for line in part.splitlines():
                     kind = {"+": "add", "-": "del"}.get(line[:1], "")
                     rows.append(f'<span class="line {kind}">{escape(line)}</span>')
-                blocks.append("<pre><code>" + "".join(rows) + "</code></pre>")
+                blocks.append('<pre translate="no"><code>' + "".join(rows) + "</code></pre>")
             else:
-                blocks.append("<pre><code>" + escape(part) + "</code></pre>")
+                blocks.append('<pre translate="no"><code>' + escape(part) + "</code></pre>")
         else:
             for paragraph in re.split(r"\n[ \t]*\n", part.strip()):
                 lines = paragraph.splitlines()
@@ -2063,52 +2125,62 @@ def render_report(report, locations):
     return "\n".join(blocks), headings
 
 
-def review_page(title, branch, report, ledger, analysis):
+def review_page(title, branch, report, ledger, analysis, lang="en"):
+    ui_language, text = report_locale(lang)
+    ui_attr = f' lang="{ui_language}"' if ui_language.split("-")[0] != lang.lower().split("-")[0] else ""
+    title_attr = ui_attr if not title else ""
+    title = title or text("Change review")
     files = analysis["evidence"] if analysis else {}
     skipped = set(analysis["skipped"]) if analysis else set()
-    file_nav, panels, locations = render_evidence(files, skipped, report_references(report))
-    sections = []
+    file_nav, panels, locations = render_evidence(files, skipped, report_references(report), text)
+    sections, headings = [], []
     facts = overview = ""
     scope = branch
     if analysis:
         scope += " · " + analysis["range"]
         added = sum(file_diff["add"] for file_diff in files.values())
         deleted = sum(file_diff["del"] for file_diff in files.values())
-        facts = '<ul class="facts"><li>L%d</li><li>%d files</li><li>+%d / −%d</li></ul>' % (
-            analysis["level"], len(files), added, deleted)
+        file_count = text("%d file" if len(files) == 1 else "%d files") % len(files)
+        facts = '<ul class="facts"%s><li>L%d</li><li>%s</li><li>+%d / −%d</li></ul>' % (
+            ui_attr, analysis["level"], file_count, added, deleted)
         if len(analysis["entries"]) == 1:
             entry = analysis["entries"][0]
             fields = {"Intent": entry["fields"].get("Intent"), "Verification": " ｜ ".join(entry["verification_results"])}
-            values = [f"<dt>{key}</dt><dd>{escape(value)}</dd>" for key, value in fields.items() if value]
+            values = [f'<dt{ui_attr}>{text(key)}</dt><dd translate="no">{escape(value)}</dd>' for key, value in fields.items() if value]
             if values:
                 overview = ('<details class="panel record-summary" id="record-summary">'
-                            '<summary>Recorded intent and verification</summary><dl>' + "".join(values) + "</dl></details>")
+                            f'<summary{ui_attr}>{text("Recorded intent and verification")}</summary><dl>'
+                            + "".join(values) + "</dl></details>")
     if report:
-        content, headings = render_report(report, locations)
-        sections.extend(headings or [("report", "Review summary")])
+        content, headings = render_report(report, locations, text, ui_attr)
+        sections.extend(headings or [("report", text("Review summary"))])
         report = '<section class="panel report" id="report">' + content + "</section>"
     evidence = ""
     if analysis:
-        sections.append(("evidence", "Code evidence"))
-        back = '<a href="#report">Back to review</a>' if report else ""
-        evidence = ('<section class="panel" id="evidence"><div class="evidence-heading"><h2>Code evidence</h2>'
+        sections.append(("evidence", text("Code evidence")))
+        back = f'<a href="#report">{text("Back to review")}</a>' if report else ""
+        evidence = (f'<section class="panel" id="evidence"{ui_attr}><div class="evidence-heading"><h2>{text("Code evidence")}</h2>'
                     + back + '</div>') + (
-            panels or "<p>No file changes in this scope.</p>") + "</section>"
+            panels or f'<p>{text("No file changes in this scope.")}</p>') + "</section>"
     if overview:
-        sections.append(("record-summary", "Recorded intent and verification"))
-    sections.append(("ledger-raw", "Original change record"))
+        sections.append(("record-summary", text("Recorded intent and verification")))
+    sections.append(("ledger-raw", text("Original change record")))
+    authored = {section_id for section_id, _ in headings}
     nav = '<div class="nav-sections">' + "".join(
-        f'<a class="nav-section" href="#{section_id}">{escape(label)}</a>' for section_id, label in sections
+        '<a class="nav-section" href="#%s"%s>%s</a>' % (
+            section_id, f' lang="{escape(lang)}"' if ui_attr and section_id in authored else "", escape(label))
+        for section_id, label in sections
     ) + '</div>'
     if file_nav:
-        nav += ('<details class="file-nav" open><summary>Browse files</summary>'
-                '<input id="file-filter" type="search" aria-label="Filter files" placeholder="Filter files" hidden>'
-                '<p id="file-filter-empty" class="meta" role="status" hidden>No matching files</p>'
+        filter_label = text("Filter files")
+        nav += (f'<details class="file-nav" open><summary>{text("Browse files")}</summary>'
+                f'<input id="file-filter" type="search" aria-label="{filter_label}" placeholder="{filter_label}" hidden>'
+                f'<p id="file-filter-empty" class="meta" role="status" hidden>{text("No matching files")}</p>'
                 + file_nav + "</details>")
-    # Normalize legacy headings in the rendered copy only.
-    ledger = re.sub(r"\A# (?:变更台账|改动记录)(?= · )", "# Change record", ledger)
     return VIEW_HTML.format(title=escape(title), scope=escape(scope), facts=facts, overview=overview,
-                            nav=nav, report=report, evidence=evidence, ledger=escape(ledger))
+                            nav=nav, report=report, evidence=evidence, ledger=escape(ledger), lang=escape(lang),
+                            navigation=text("Report navigation"), record_label=text("Original change record"),
+                            ui_attr=ui_attr, title_attr=title_attr)
 
 
 def cmd_view(a):
@@ -2122,10 +2194,11 @@ def cmd_view(a):
     analysis = None
     if a.scope or a.base:
         mode, ref = pick_mode(a, "entry")
-        analysis = analyze(root, load_cfg(root), mode, ref, 0, a.current_entry, evidence=True)
+        _, text = report_locale(a.lang)
+        analysis = analyze(root, load_cfg(root), mode, ref, 0, a.current_entry, evidence=True, scope_text=text)
     out = page_path(root, br)
     with open(lp, encoding="utf-8") as ledger:
-        page = review_page(a.title or "Change review", br, report, ledger.read(), analysis)
+        page = review_page(a.title, br, report, ledger.read(), analysis, lang=a.lang)
     with open(out, "w", encoding="utf-8") as output:
         output.write(page)
     print("✓ %s" % os.path.relpath(out, root))
@@ -2177,6 +2250,7 @@ def main():
     p = sp.add_parser("backfill"); p.add_argument("--commit", default="HEAD"); p.set_defaults(fn=cmd_backfill)
     sp.add_parser("stats").set_defaults(fn=cmd_stats)
     p = sp.add_parser("view"); p.add_argument("--open", action="store_true")
+    p.add_argument("--lang", type=language_tag, default="en", help="Report language tag (default: en).")
     p.add_argument("--title", help="Report title, such as Branch review or C-004 review."); p.set_defaults(fn=cmd_view)
     g = p.add_mutually_exclusive_group()
     g.add_argument("--scope", type=parse_view_scope, metavar="SCOPE", help="Report scope: latest, C-xxx, all, or branch.")

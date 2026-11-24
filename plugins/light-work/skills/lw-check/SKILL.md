@@ -32,6 +32,8 @@ Use reversions, hotspots, and repeated revisions to choose scenarios. Judge acti
 
 ## Report the result
 
+Apply the [shared output language rule](../lw-review/references/output-language.md).
+
 Use the scope in the title and keep the result within one screen. For each key finding give the scenario, expected result, actual result, and evidence. List failures first, then gaps, warnings, and passing scenarios. Mention commands and results that were actually run. Include a missing check only if it limits a conclusion. Focus on behavior.
 
 If the user requests a fix, follow `lw-record` → `lw-edit` → `lw-review`. If a conflict is resolved, record the replacement with `supersedes`. If an unregistered change is confirmed intentional, record it in its entry or a new chore.

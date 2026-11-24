@@ -281,7 +281,7 @@ overview=${page#*id=\"record-summary\">}
 overview=${overview%%</details>*}
 expect "Report metadata includes executed results" "$overview" "fixture-check → 断言失败"
 grep -qF "未做真机" <<<"$overview" && fail "Report metadata included unrun checks" "$overview" || ok "Report metadata omits unrun checks"
-expect "Show an English heading for the legacy record" "$page" "# Change record · feature/voice"
+expect "Preserve the legacy heading in the raw record" "$page" "# 变更台账 · feature/voice"
 grep -q '^# 变更台账' .light-work/feature-voice.md && ok "Keep the legacy file unchanged" || fail "The report modified the legacy record" ""
 expect "Render before and after columns" "$page" "<th>Before</th><th>After</th>"
 expect "An entry report displays its scope" "$page" 'C-002 (1 completed round)'
@@ -289,7 +289,7 @@ expect "Section navigation points to the title" "$page" '<a class="nav-section" 
 expect "Review sections have distinct anchors" "$page" '<h2 id="section-1">Key changes</h2>'
 expect "File evidence has an offline filter" "$page" 'id="file-filter" type="search"'
 expect "Evidence links back to the review" "$page" '<a href="#report">Back to review</a>'
-expect "A source reference points to a Git diff row" "$page" 'href="#file-1-hunk-1-line-3"><code>src/search/voice.ts:3</code>'
+expect "A source reference points to a Git diff row" "$page" 'href="#file-1-hunk-1-line-3"><code translate="no">src/search/voice.ts:3</code>'
 expect "The linked diff row exists" "$page" 'id="file-1-hunk-1-line-3"'
 expect "Render steps offline" "$page" '<ol class="flow">'
 expect "Render a branching flowchart offline" "$page" '<figure class="diagram flowchart">'
@@ -299,6 +299,50 @@ expect "Render a dependency diagram offline" "$page" '<figure class="diagram arc
 expect "Collapse the original record by default" "$page" '<details class="panel" id="ledger-raw">'
 expect "Escape HTML in report content" "$page" '&lt;script&gt;alert'
 grep -q '<script src=' <<<"$page" && fail "The report used a remote script" "" || ok "The report has no remote scripts"
+cat <<'LW_REPORT_ZH' | $L view --scope C-002 --lang zh-Hans --title '空输入审阅' >/dev/null
+## 结论
+
+空输入返回失败，见 `src/search/voice.ts:3`。
+
+```flow
+读取输入 -> 返回失败 | 为空
+```
+LW_REPORT_ZH
+page=$(cat .light-work/feature-voice.html)
+expect "The report declares its chosen language" "$page" '<html lang="zh-Hans">'
+expect "Simplified Chinese labels and scope are localized" "$page" "C-002 的 1 轮已收尾改动"
+expect "Accessibility labels are localized" "$page" 'aria-label="报告导航"'
+expect "File filtering uses the same language" "$page" 'placeholder="筛选文件"'
+expect "The diagram caption is localized" "$page" '<figcaption>流程图</figcaption>'
+expect "Author text retains the same Git diff anchor" "$page" 'href="#file-1-hunk-1-line-3"><code translate="no">src/search/voice.ts:3</code>'
+expect "Diff content stays in its original language" "$page" 'reason: &quot;empty&quot;'
+python3 - <<'PY'
+from html import unescape
+from pathlib import Path
+page = Path('.light-work/feature-voice.html').read_text()
+record = page.split('id="ledger-raw">', 1)[1].split('<pre translate="no">', 1)[1].split('</pre>', 1)[0]
+assert unescape(record) == Path('.light-work/feature-voice.md').read_text()
+PY
+ok "The original record is rendered verbatim"
+$L view --scope all --lang zh-CN </dev/null >/dev/null
+page=$(cat .light-work/feature-voice.html)
+expect "The Simplified Chinese regional tag selects Chinese labels" "$page" 'placeholder="筛选文件"'
+expect "The Simplified Chinese region uses the localized default title" "$page" '<title>改动审阅</title>'
+for lang in zh-Hant zh-TW; do
+  $L view --scope all --lang "$lang" </dev/null >/dev/null
+  page=$(cat .light-work/feature-voice.html)
+  expect "$lang retains the report language tag" "$page" "<html lang=\"$lang\">"
+  expect "$lang uses the English default title" "$page" '<title lang="en">Change review</title>'
+done
+printf '## Résumé\n\nRésultat conservé.\n' | $L view --scope C-002 --lang fr-CA --title 'Vérification' >/dev/null
+page=$(cat .light-work/feature-voice.html)
+expect "Unsupported catalog keeps the authored language tag" "$page" '<html lang="fr-CA">'
+expect "Unsupported catalog preserves authored content" "$page" 'Résultat conservé.'
+expect "English fallback labels have their own language" "$page" 'aria-label="Report navigation" lang="en"'
+previous_page=$(git hash-object .light-work/feature-voice.html)
+out=$($L view --scope C-002 --lang 'zh_CN' </dev/null 2>&1) && fail "Malformed tag was accepted" "$out"
+expect "Malformed language tags are rejected" "$out" 'Use a language tag'
+[ "$previous_page" = "$(git hash-object .light-work/feature-voice.html)" ] && ok "Invalid language leaves the last report intact" || fail "Invalid language overwrote the report" ""
 mkdir -p "src/显示"
 printf 'let value = 1;\n' > "src/显示/中文 文件.ts"
 printf 'const quotedFile = 1;\n' > 'src/显示/带"引号.ts'
@@ -313,7 +357,7 @@ page=$(cat .light-work/feature-voice.html)
 expect "Branch navigation displays Unicode paths" "$page" 'src/显示/中文 文件.ts'
 expect "A Unicode path with spaces has diff evidence" "$page" '+let value = 1;'
 expect "A quoted path has diff evidence" "$page" '+const quotedFile = 1;'
-expect "Retain a cited anchor late in a long patch" "$page" '-line-90"><code>src/long.ts:90</code>'
+expect "Retain a cited anchor late in a long patch" "$page" '-line-90"><code translate="no">src/long.ts:90</code>'
 expect "Mark omitted lines in long excerpts" "$page" 'Omitted'
 expect "Show totals for generated files" "$page" '+10000 / −0'
 grep -qF 'generatedOnly' <<<"$page" && fail "The report included a generated file's body" "" || ok "Generated files retain only statistics"

@@ -79,6 +79,8 @@ The page starts with scope, conclusions, and the report's key diagram. Section n
 
 Small reviews use a chat card. L3 and merge reports use HTML with a visible link. Before automatic closeout, verify the generated file and scope. If the file cannot be delivered, give the full review in chat with the reason. Manually rendering a report does not change the ledger or checkpoint.
 
+The assistant supplies `view --lang TAG` from the same language decision as the chat and authored report. The renderer declares that [BCP 47 language tag](https://www.w3.org/International/questions/qa-html-language-declarations) on the page and selects built-in English or Simplified Chinese labels. It uses English labels when a catalog is unavailable or no tag is supplied. Report text and original evidence are rendered as supplied.
+
 ## Hooks
 
 | Event | CLI | Behavior |
@@ -106,7 +108,7 @@ python3 ~/.light-work/lw.py review --base TREE --current-entry C-004
 python3 ~/.light-work/lw.py checkpoint --entry C-004 --base TREE
 python3 ~/.light-work/lw.py conflicts --recorded-only
 python3 ~/.light-work/lw.py why src/example.py:42
-python3 ~/.light-work/lw.py view --scope branch < report.md
+python3 ~/.light-work/lw.py view --scope branch --lang en < report.md
 python3 ~/.light-work/lw.py ask
 python3 ~/.light-work/lw.py lint
 python3 ~/.light-work/lw.py stats

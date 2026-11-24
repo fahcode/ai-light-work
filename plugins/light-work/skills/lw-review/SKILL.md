@@ -38,14 +38,16 @@ Update actual `Files`, executed `Verification`, `Rounds`, and `Level` (maximum a
 
 Use [the card template](references/cards.md). One entry or round gets the label `Review · C-xxx · Lx`. L0 and L1 use chat, L2 uses chat with optional HTML, and L3 and branch reviews use HTML. For `all`, group related changes and show their evidence, risks, and validation. Branch review includes initial development and worktree changes.
 
+Apply the [shared output language rule](references/output-language.md) to the chat summary and the report.
+
 Make the outcome legible to someone taking over. Start with the result, whether the constraints hold, and anything the user needs to decide. For each important scenario, explain the trigger, key path before and after, observable result, and evidence. Cover meaningful failures, cancellation, retries, compatibility, and shared state when they change the outcome. Use the same range for both versions. Report unrun checks only when they limit a conclusion.
 
 For L2, L3 and branch reviews with meaningful branches, ordering, state changes, or cross-module effects, put one main diagram just after the conclusion. Use a flowchart for decisions, a sequence diagram for ordering, and a dependency diagram for module relationships. L2 chat can use text arrows. A simple change can use a sentence and a source reference.
 
-Render HTML with the same scope as the review: `--scope latest`, `--scope C-xxx`, `--scope all`, or `--scope branch` for manual use. In automatic review pass `--base <starting tree SHA> --current-entry C-xxx`.
+Render HTML with the same scope as the review: `--scope latest`, `--scope C-xxx`, `--scope all`, or `--scope branch` for manual use. In automatic review pass `--base <starting tree SHA> --current-entry C-xxx`. Set `--lang` to the language chosen for the authored report.
 
 ```bash
-$LW view --scope C-005 --title "Task acknowledgment review" <<'LW_REPORT'
+$LW view --scope C-005 --lang en --title "Task acknowledgment review" <<'LW_REPORT'
 ## Conclusion
 
 A task is acknowledged after its result is written. A write failure leaves it eligible for retry.

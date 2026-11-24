@@ -1,5 +1,10 @@
 # Changelog
 
+## light-work 0.6.10 · 2026-11-24
+
+- Use the language requested by the user or inferred from the conversation for Check and Review output, including report text and diagrams.
+- Keep offline report controls in English or Simplified Chinese, with English as the fallback. Preserve code, diffs, and other source evidence as supplied.
+
 ## light-work 0.6.9 · 2026-11-24
 
 - Made English the default for the plugin, CLI, hooks, review reports and documentation. The Chinese README remains available.
