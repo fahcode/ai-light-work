@@ -85,14 +85,15 @@ The assistant supplies `view --lang TAG` from the same language decision as the 
 
 | Event | CLI | Behavior |
 |---|---|---|
-| SessionStart | `hook session-start` | Initialize the branch record, install the stable CLI copy at `~/.light-work/lw.py`, and inject workflow and constraints. |
-| UserPromptSubmit | `hook prompt` | Show open entries and detect possible edit intent. Clear the waiting state after the next user message. |
-| PreToolUse | `hook pre-edit` | Show path-scoped or global constraints. Deduplicate identical constraint text for the same path. |
-| PostToolUse | `hook post-edit` | Mark recognized edits as pending closeout. |
-| Stop | `hook stop` | Remind once per unclosed worktree state. Skip while waiting for a decision. |
+| SessionStart | `hook session-start` | Install the stable CLI copy at `~/.light-work/lw.py` and give the assistant the rule for when to start a development round. |
+| UserPromptSubmit | `hook prompt` | End the previous hook activation. The assistant can explicitly reactivate an unfinished development round when resuming it. |
+| PreToolUse | `hook pre-edit` | During an active round, show matching constraints and deduplicate unchanged text. |
+| Stop | `hook stop` | Compare the active round with its starting tree. Remind once per changed tree and skip while waiting for a decision. |
 | Git post-commit | `backfill` | Link a commit when its content identifies the reviewed entry. |
 
-PreToolUse and PostToolUse recognize the configured editor tools and Codex patch paths. The file list can come from a host's tool arguments or the file headers of an `apply_patch` patch. Shell writes can bypass edit detection. The hook never edits the user's source files. Existing `core.hooksPath` configurations are left intact. Hook failures are reported at the next session start or prompt. Use `LW_DEBUG=1` to inspect a failure directly.
+The assistant activates a round through `lw-record` once it has identified an authorized development change. That skill initializes the branch record and uses `snapshot --entry` to bind the worktree's active round to its branch, entry, and starting tree. A matching checkpoint closes the round. Historical records and manual reviews remain available independently. Each worktree has one active round.
+
+PreToolUse recognizes configured editor tools and Codex patch paths. Stop compares Git trees, so it also covers edits made with shell commands during an active round. Git hooks leave source files untouched. Existing `core.hooksPath` configurations are left intact. Hook failures are reported once at the next session start or prompt. Use `LW_DEBUG=1` to inspect a failure directly.
 
 ## Command reference
 
@@ -100,7 +101,7 @@ PreToolUse and PostToolUse recognize the configured editor tools and Codex patch
 python3 ~/.light-work/lw.py init
 python3 ~/.light-work/lw.py context --files src/example.py
 python3 ~/.light-work/lw.py next-id
-python3 ~/.light-work/lw.py snapshot
+python3 ~/.light-work/lw.py snapshot --entry C-004
 python3 ~/.light-work/lw.py review C-004 --json
 python3 ~/.light-work/lw.py check branch
 python3 ~/.light-work/lw.py check --base TREE --current-entry C-004

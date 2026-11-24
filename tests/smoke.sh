@@ -43,35 +43,34 @@ echo "Hooks: Git worktree detection"
 out=$(hook session-start "{\"cwd\":\"$TMP\"}")
 [ -z "$out" ] && [ ! -e "$HOME/.light-work/lw.py" ] && ok "Skip initialization outside Git" || fail "Initialized outside Git" "$out"
 out=$(hook session-start "{\"cwd\":\"$REPO\"}")
-expect "Show the change record on the base branch" "$out" "## Active constraints"
-[ -f .light-work/main.md ] && ok "Create a record for the base branch" || fail "Missing base branch record" ""
-out=$($L init); expect "Allow explicit initialization on the base branch" "$out" ".light-work/main.md"
+expect "Inject the development workflow on the base branch" "$out" "development docs"
+[ ! -e .light-work ] && [ ! -e .git/hooks/post-commit ] &&
+  [ -z "$(git for-each-ref refs/light-work)" ] && ok "Session start leaves the repository unchanged" || fail "Initialized during session start" "$out"
+[ -f "$HOME/.light-work/lw.py" ] && ok "Install the CLI at the stable path" || fail "Missing stable CLI" ""
+out=$(cd src/search && $L init); expect "Allow initialization from a project subdirectory" "$out" ".light-work/main.md"
+[ -x .git/hooks/post-commit ] && git check-ignore .light-work/main.md >/dev/null &&
+  ok "Initialize the current repository's hook and local exclude" || fail "Initialization used the wrong Git directory" "$out"
 git checkout -q --detach
-out=$(hook session-start "{\"cwd\":\"$REPO\"}")
+out=$($L init)
 expect "Use the current commit to identify detached HEAD" "$out" ".light-work/detached-$(git rev-parse --short HEAD).md"
 git checkout -qb feature/voice
 
-echo "Hooks: session start"
-out=$(hook session-start "{\"cwd\":\"$REPO\"}")
-expect "Inject the workflow" "$out" "lw-record"
-[ -f .light-work/feature-voice.md ] && ok "Create the branch record" || fail "Create the branch record" "$(ls -la .light-work)"
-[ -f "$HOME/.light-work/lw.py" ] && ok "Install the CLI at the stable path" || fail "shim" ""
-git rev-parse -q --verify refs/light-work/start/feature-voice >/dev/null && ok "Save the starting snapshot" || fail "Missing starting snapshot" ""
+echo "Hooks: idle prompts and writing in a Git repository"
+out=$(hook prompt "{\"cwd\":\"$REPO\",\"prompt\":\"帮我修改这篇讲稿\"}")
+[ -z "$out" ] && ok "Writing prompts stay quiet" || fail "A writing prompt triggered the workflow" "$out"
+TALK="{\"cwd\":\"$REPO\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$REPO/talk.md\"}}"
+out=$(hook pre-edit "$TALK")
+[ -z "$out" ] && ok "An unrelated in-repo edit gets no instructions" || fail "An unrelated edit triggered the workflow" "$out"
+printf '# 讲稿\n' > talk.md
+out=$(hook stop "{\"cwd\":\"$REPO\"}")
+[ -z "$out" ] && [ ! -e .light-work/feature-voice.md ] && ok "Writing creates no record or closeout reminder" || fail "Writing entered the development workflow" "$out"
+rm talk.md
 
-echo "Hooks: user prompt and before edit"
-out=$(hook prompt "{\"cwd\":\"$REPO\",\"prompt\":\"空字符串也别当成功，改一下\"}")
-expect "Run the record workflow for edit requests" "$out" "For edits, run lw-record"
-ledger_before=$(git hash-object .light-work/feature-voice.md)
-out=$(hook prompt "{\"cwd\":\"$REPO\",\"prompt\":\"为什么要这样改？先分析一下\"}")
-expect "Ask the assistant to interpret edit keywords in questions" "$out" "Answer questions and analysis requests without creating an entry"
-[ "$(git hash-object .light-work/feature-voice.md)" = "$ledger_before" ] && ok "Prompt reminders do not create entries" || fail "The question changed the record" "$out"
 EDIT="{\"cwd\":\"$REPO\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$REPO/src/search/voice.ts\"}}"
-out=$(hook pre-edit "$EDIT")
-expect "Remind when there is no open entry" "$out" "No open entry"
 ln -s "$REPO" "$TMP/link"   # Cover worktrees opened through symlinks.
-out=$(hook pre-edit "{\"cwd\":\"$TMP/link\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$TMP/link/src/search/voice.ts\"}}")
-expect "Recognize an edit made through a symlink" "$out" "No open entry"
-
+$L init >/dev/null
+[ -f .light-work/feature-voice.md ] && ok "Initialize the record when development starts" || fail "Missing development record" ""
+git rev-parse -q --verify refs/light-work/start/feature-voice >/dev/null && ok "Save the starting snapshot" || fail "Missing starting snapshot" ""
 echo "Skill: record the intent"
 cat >> .light-work/feature-voice.md <<'EOF'
 ### C-001 · 2026-11-19 · change · settled · null 返回失败
@@ -100,7 +99,14 @@ cat >> .light-work/feature-voice.md <<'EOF'
 EOF
 out=$($L lint); expect "Lint accepts the record" "$out" "Change record valid"
 out=$(hook pre-edit "$EDIT")
-expect "Inject constraints from an earlier entry" "$out" "C-001.1"
+[ -z "$out" ] && ok "An open ledger entry alone leaves hooks idle" || fail "Open history caused activation" "$out"
+out=$($L snapshot --entry C-001 2>&1) && fail "Activated a settled entry" "$out"
+expect "Only an open entry can activate a round" "$out" "No open change record found"
+first_round_base=$(cd src/search && $L snapshot --entry C-002)
+out=$(hook stop "{\"cwd\":\"$REPO\"}")
+[ -z "$out" ] && ok "A recorded round with no edits stays quiet" || fail "A clean round triggered closeout" "$out"
+out=$(hook pre-edit "{\"cwd\":\"$TMP/link\",\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$TMP/link/src/search/voice.ts\"}}")
+expect "Inject constraints for a symlink path from an earlier entry" "$out" "C-001.1"
 expect "Legacy global constraints are labeled" "$out" "C-001.3[global]"
 expect "Inject file constraints before editing" "$out" "C-002.1"
 out=$(hook pre-edit "$EDIT"); [ -z "$out" ] && ok "Deduplicate an unchanged constraint" || fail "Duplicate reminder" "$out"
@@ -110,20 +116,24 @@ out=$(hook pre-edit "$EDIT"); expect "Show changed text for an existing constrai
 out=$(hook pre-edit "$EDIT"); [ -z "$out" ] && ok "Deduplicate the new constraint text on the next edit" || fail "Duplicate reminder after updating the constraint" "$out"
 
 echo "Skill: edit and finish"
-first_round_base=$($L snapshot)
 python3 - <<'EOF'
 p = "src/search/voice.ts"; s = open(p).read()
 s = s.replace('  return { ok: true, data: res };',
               '  // 空字符串说明没识别到语音，不能当成功\n  if (res === "") return { ok: false, reason: "empty" };\n  return { ok: true, data: res };')
 open(p, "w").write(s)
 EOF
-hook post-edit "$EDIT" >/dev/null
 out=$(hook stop "{\"cwd\":\"$REPO\",\"stop_hook_active\":true}"); [ -z "$out" ] && ok "Skip a Stop continuation" || fail "Unexpected reminder on Stop continuation" "$out"
 $L ask >/dev/null
 out=$(hook stop "{\"cwd\":\"$REPO\"}"); [ -z "$out" ] && ok "Skip a reminder while waiting for a decision" || fail "Unexpected reminder while waiting" "$out"
-hook prompt "{\"cwd\":\"$REPO\",\"prompt\":\"1\"}" >/dev/null
+hook prompt "{\"cwd\":\"$REPO\",\"prompt\":\"帮我润色文章\"}" >/dev/null
+out=$(hook pre-edit "$TALK")
+[ -z "$out" ] && ok "A new task stays outside unfinished development" || fail "An old round leaked into writing" "$out"
 out=$(hook stop "{\"cwd\":\"$REPO\"}")
-expect "Resume the reminder after the user replies" "$out" "Run lw-review to finish"
+[ -z "$out" ] && ok "A new prompt ends the previous activation" || fail "A previous round remained active" "$out"
+resumed_base=$($L snapshot --entry C-002 --base "$first_round_base")
+[ "$resumed_base" = "$first_round_base" ] && ok "Resume the same round from its original snapshot" || fail "Resume lost the starting tree" "$resumed_base"
+out=$(hook stop "{\"cwd\":\"$REPO\"}")
+expect "Resume the reminder after reactivating the same round" "$out" "Run lw-review to finish"
 python3 -c 'import json, sys; assert set(json.loads(sys.argv[1])) == {"systemMessage"}' "$out" &&
   ok "Stop emits only the non-blocking message" || fail "Stop emitted extra control fields" "$out"
 out=$(hook stop "{\"cwd\":\"$REPO\"}"); [ -z "$out" ] && ok "Remind once for the same worktree state" || fail "Duplicate closeout reminder" "$out"
@@ -165,7 +175,7 @@ cat >> .light-work/feature-voice.md <<'EOF'
 - Level: L1
 EOF
 printf 'export const existingWork = 1;\n' > src/unrelated.ts
-round_base=$($L snapshot)
+round_base=$($L snapshot --entry C-003)
 cat > src/search/voice.ts <<'EOF'
 export function handleResult(res) {
   if (res === null || res === "") return { ok: false, reason: "fail" };
@@ -229,7 +239,8 @@ s = s.replace("- 过程: R1 用户提出\n- Level: L1", "- 过程: R1 用户提�
 s = s.replace("- 验证: ✗ 未验证\n- 过程: R1 用户提出；R2", "- 验证: ✓ 应该没问题\n- 过程: R1 用户提出；R2")
 open(p, "w").write(s)
 EOF
-out=$(hook prompt "{\"cwd\":\"$REPO\",\"prompt\":\"还是不对\"}"); expect "Round three prompts a root-cause review" "$out" "round 3"
+out=$(hook prompt "{\"cwd\":\"$REPO\",\"prompt\":\"还是不对\"}")
+[ -z "$out" ] && ok "Old third rounds do not inject prompt guidance" || fail "Recorded history influenced an idle prompt" "$out"
 out=$($L lint || true); expect "Reject a claim without verification evidence" "$out" "is not evidence"
 
 echo "Commit links, settlement and reports"
@@ -370,20 +381,23 @@ rm "src/显示/中文 文件.ts" 'src/显示/带"引号.ts' "src/long.ts" "dist/
 git status --porcelain | grep -q ".light-work" && fail "Change records appeared in git status" "$(git status --porcelain)" || ok "Local Git excludes .light-work"
 
 echo "Branch switching follows the current record"
+$L snapshot --entry C-002 >/dev/null
 git checkout -qb feature/other
 out=$(hook session-start "{\"cwd\":\"$REPO\"}")
-[ -f .light-work/feature-other.md ] && ok "Initialize the new branch record" || fail "Missing new branch record" "$(ls .light-work)"
-out=$(hook pre-edit "$EDIT"); expect "Do not carry constraints into another branch" "$out" "No open entry"
-grep -q "C-001.1" <<<"$out" && fail "Old branch constraints leaked" "$out" || ok "Old branch constraints are absent"
+[ ! -e .light-work/feature-other.md ] && ok "Opening another branch leaves it uninitialized" || fail "Initialized an idle branch" "$out"
+out=$(hook pre-edit "$EDIT")
+[ -z "$out" ] && ok "Do not carry constraints into another branch" || fail "Old branch constraints leaked" "$out"
 git checkout -qb feature/third
-hook prompt "{\"cwd\":\"$REPO\",\"prompt\":\"改一下\"}" >/dev/null
-[ -f .light-work/feature-third.md ] && ok "Initialize a branch after an in-session checkout" || fail "Missing branch record after checkout" "$(ls .light-work)"
+out=$(hook prompt "{\"cwd\":\"$REPO\",\"prompt\":\"改一下\"}")
+[ -z "$out" ] && [ ! -e .light-work/feature-third.md ] && ok "Prompt leaves a switched branch uninitialized" || fail "Prompt initialized another branch" "$out"
 git checkout -q feature/voice
 out=$($L context); expect "Restore the original record after switching back" "$out" "C-003"
+out=$(hook pre-edit "$EDIT")
+[ -z "$out" ] && ok "Switching back retains history without restoring activation" || fail "A previous activation leaked across a prompt" "$out"
 
-echo "Codex patch edits and Stop reminders"
+echo "Codex patch constraints and shell edit closeout"
 git checkout -qb feature/codex
-hook session-start "{\"cwd\":\"$REPO\"}" >/dev/null
+$L init >/dev/null
 cat >> .light-work/feature-codex.md <<'EOF'
 ### C-001 · 2026-11-20 · change · open · Handle missing input
 - Intent: Handle an undefined result before calling handleResult.
@@ -402,6 +416,7 @@ codex_edit() { # codex_edit <event> supplies a two-file patch with relative path
     "tool_input": {"input": "*** Begin Patch\n*** Update File: src/search/voice.ts\n@@\n-x\n+y\n*** Update File: src/ui/page.ts\n@@\n-a\n+b\n*** End Patch\n"}}))' "$REPO" \
     | python3 "$SCRIPT" hook "$1"
 }
+$L snapshot --entry C-001 >/dev/null
 out=$(codex_edit pre-edit); expect "Inject constraints for apply_patch" "$out" "C-001.1"
 expect "English global constraints are labeled" "$out" "C-001.1[global]"
 expect "Parse every file in a patch" "$out" "Constraints to preserve when editing src/ui/page.ts"
@@ -409,9 +424,8 @@ out=$($L context)
 expect "English verification retains executed failures" "$out" "fixture → failed"
 grep -qF 'Not run: error path' <<<"$out" && fail "Unrun checks leaked into context" "$out" || ok "English verification omits unrun checks"
 echo 'export function onVoice2(res) { return res ?? { ok: false, reason: "none" }; }' >> src/ui/page.ts
-codex_edit post-edit >/dev/null
 out=$(hook stop "{\"cwd\":\"$REPO\",\"last_assistant_message\":\"改好了，结果如下。\"}")
-expect "Remind about unclosed patch edits" "$out" '"systemMessage"'
+expect "Remind about unclosed changes made via the shell" "$out" '"systemMessage"'
 echo '// 再改一点' >> src/ui/page.ts
 out=$(hook stop "{\"cwd\":\"$REPO\"}")
 expect "Remind again after another edit" "$out" '"systemMessage"'
@@ -423,7 +437,7 @@ expect "Why finds the open entry" "$out" "C-001 · change · open"
 echo "Edge cases: deleted files, lockfiles and hook failures"
 git add -A && git commit -qm codex
 git checkout -qb feature/edge
-hook session-start "{\"cwd\":\"$REPO\"}" >/dev/null
+$L init >/dev/null
 echo "lockfileVersion: 9" > pnpm-lock.yaml
 out=$($L score); expect "A lockfile-only change is L0" "$out" "Level: L0"
 grep -qF "Changed configuration" <<<"$out" && fail "A lockfile was treated as configuration" "$out" || ok "Do not classify a lockfile as configuration"
@@ -444,7 +458,7 @@ out=$(hook prompt "{\"cwd\":\"$REPO\",\"prompt\":\"看看这个函数\"}"); grep
 
 echo "Backfill separate commits to one file"
 git checkout -qb feature/partial
-hook session-start "{\"cwd\":\"$REPO\"}" >/dev/null
+$L init >/dev/null
 shared='src/shared settings.ts'
 printf 'export const label = "old";\nexport const timeout = 5;\n' > "$shared"
 git add -- "$shared" && git commit -qm 'add shared settings'

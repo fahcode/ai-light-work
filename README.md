@@ -55,7 +55,7 @@ The repository includes CodeBuddy-compatible manifests. Hook behavior in a live 
 | `lw-edit` | Finds the root cause, applies a focused fix, checks affected callers and runs a relevant verification. An edit that clearly conflicts with an established constraint is raised with the user. |
 | `lw-review` | Compares the round with its starting snapshot, explains what changed and what still holds, then records a checkpoint. |
 
-Questions and read-only investigations can proceed without a change entry. You control commits and pushes. After a commit, the plugin links it to a reviewed entry when its content matches that entry's checkpoint.
+The assistant starts the workflow for authorized project development changes. Questions, read-only investigations and unrelated writing leave it idle, even inside a Git repository. You control commits and pushes. After a commit, the plugin links it to a reviewed entry when its content matches that entry's checkpoint.
 
 The Review is written for someone taking over the code. It describes the trigger, the before and after path, the observable result, and the evidence. Small changes get a short chat card. Complex behavior gets a diagram when it makes decisions, ordering, state changes, or dependencies easier to follow. L3 and branch reviews link to a self-contained HTML report. The report includes section navigation, a file filter, and links from the explanation or diagram to the scoped Git diff.
 

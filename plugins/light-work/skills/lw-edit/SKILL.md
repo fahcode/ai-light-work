@@ -7,8 +7,8 @@ description: Make focused changes within the recorded intent and verify the affe
 
 ## Before editing
 
-- Read the injected constraints or run `python3 ~/.light-work/lw.py context --files <paths>`.
-- For a bug, trace the wrong behavior to its source. Use `python3 ~/.light-work/lw.py why PATH:LINE` to understand why a suspicious line exists.
+- Use the active development round from `lw-record`. Read the injected constraints or run `python3 ~/.light-work/lw.py context --files <paths>`.
+- For a bug, trace the wrong behavior to its source. Revisit the diagnosis before a third attempt at the same unresolved bug. Use `python3 ~/.light-work/lw.py why PATH:LINE` to understand why a suspicious line exists.
 - Check callers and consumers of the functions, types, and values you plan to change.
 
 If the edit would clearly break an active constraint the user did not address, run `python3 ~/.light-work/lw.py ask` and ask one concise question. Constraints the user is actively revising in the same open entry can be updated there.

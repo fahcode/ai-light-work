@@ -9,7 +9,7 @@ Commands used by skills:
   next-id [--baseline]         Allocate the next change ID.
   review [C-xxx | all | branch]   Inspect changes and evidence.
   check [C-xxx | all | branch]    Look for regressions and gaps.
-  snapshot                     Capture the worktree before editing.
+  snapshot [--entry C-xxx]    Capture the worktree and optionally activate a round.
   checkpoint --entry C-xxx --base REF   Record a completed round.
   ask                          Suppress the closeout reminder while awaiting a decision.
   conflicts                    Inspect overlap and reversions.
@@ -130,7 +130,7 @@ def empty_tree():
 
 def worktree_tree(root):
     """Snapshot tracked and unignored untracked files without changing the real index."""
-    idx = git("rev-parse", "--git-path", "index").strip()
+    idx = git("rev-parse", "--git-path", "index", cwd=root).strip()
     if not os.path.isabs(idx):
         idx = os.path.join(root, idx)
     fd, tmp = tempfile.mkstemp(prefix="lw-index-")
@@ -731,7 +731,7 @@ LEDGER_HEAD = """# Change record · {branch}
 
 
 def ensure_exclude(root):
-    ex = git("rev-parse", "--git-path", "info/exclude").strip()
+    ex = git("rev-parse", "--git-path", "info/exclude", cwd=root).strip()
     if not os.path.isabs(ex):
         ex = os.path.join(root, ex)
     os.makedirs(os.path.dirname(ex), exist_ok=True)
@@ -748,7 +748,7 @@ def install_hook(root):
     if git("config", "--get", "core.hooksPath", check=False).strip():
         print("  · Existing core.hooksPath detected. Git's post-commit hook was not installed.")
         return
-    hp = git("rev-parse", "--git-path", "hooks/post-commit").strip()
+    hp = git("rev-parse", "--git-path", "hooks/post-commit", cwd=root).strip()
     if not os.path.isabs(hp):
         hp = os.path.join(root, hp)
     txt = open(hp, encoding="utf-8").read() if os.path.exists(hp) else "#!/bin/sh\n"
@@ -816,7 +816,7 @@ def cmd_context(a):
     print("Current branch handoff (generated from the change record)")
     print("Branch: %s  Base: %s  Change record: %s" % (br, base, os.path.relpath(lp, root)))
     if not os.path.exists(lp):
-        print("No change record yet. The session hook creates one automatically.")
+        print("No change record yet. Run lw-record for a development change or use init.")
         return
     entries, errors = parse_ledger(lp)
     if errors:
@@ -997,28 +997,39 @@ def cmd_check(a):
 
 
 def state_path(root):
-    d = git("rev-parse", "--git-path", "light-work").strip()
-    if not os.path.isabs(d):
-        d = os.path.join(root, d)
-    os.makedirs(d, exist_ok=True)
-    return os.path.join(d, "state-%s.json" % slug(current_branch()))
+    # A worktree has one active round. Branch history lives in the separate ledger.
+    path = git("rev-parse", "--git-path", "light-work/round.json", cwd=root).strip()
+    return os.path.join(root, path)
 
 
 def state_load(root):
     try:
-        return json.load(open(state_path(root), encoding="utf-8"))
-    except Exception:
-        return {"dirty": False, "ctx_shown": {}}
+        with open(state_path(root), encoding="utf-8") as file:
+            state = json.load(file)
+    except (FileNotFoundError, ValueError):
+        return {}
+    return state if state.get("branch") == current_branch() else {}
 
 
-def state_save(root, st):
-    json.dump(st, open(state_path(root), "w", encoding="utf-8"), ensure_ascii=False)
+def state_save(root, state):
+    path = state_path(root)
+    directory = os.path.dirname(path)
+    os.makedirs(directory, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            json.dump(state, file, ensure_ascii=False)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 def state_clear(root):
-    st = state_load(root)
-    st.update({"dirty": False, "nag_tree": None, "awaiting": False})
-    state_save(root, st)
+    try:
+        os.unlink(state_path(root))
+    except FileNotFoundError:
+        pass
 
 
 def cmd_checkpoint(a):
@@ -1028,9 +1039,12 @@ def cmd_checkpoint(a):
     segs, _ = resolve_range(root, cfg, "base" if a.base else "checkpoint", a.base)
     frm, tree = segs[0]
     frm_tree = git("rev-parse", frm + "^{tree}").strip()
+    state = state_load(root)
+    closes_round = state.get("entry") == a.entry and state.get("base") == frm_tree
     if frm_tree == tree and not a.force:
         print("No new changes. Checkpoint unchanged.")
-        state_clear(root)
+        if closes_round:
+            state_clear(root)
         return
     ref = cp_ref(br)
     parent = git("rev-parse", ref).strip() if git_ok("rev-parse", "--verify", "-q", ref) else None
@@ -1041,13 +1055,25 @@ def cmd_checkpoint(a):
     msg = "ledger checkpoint entry=%s from=%s at=%s" % (a.entry or "-", frm_tree,
                                                          _dt.datetime.now().isoformat(timespec="seconds"))
     git("update-ref", ref, make_commit(tree, msg, parent, base_parent))
-    state_clear(root)
+    if closes_round:
+        state_clear(root)
     print("✓ Checkpoint recorded (%s%s). Subsequent score starts here." % (
         tree[:7], ", entry " + a.entry if a.entry else ""))
 
 
 def cmd_snapshot(a):
-    print(worktree_tree(repo_root()))
+    root = repo_root()
+    if not a.entry:
+        if a.base:
+            die("--base requires --entry.")
+        print(worktree_tree(root))
+        return
+    entries, _ = parse_ledger(ledger_path(root))
+    if not any(e["id"] == a.entry and e["status"] == "open" for e in change_entries(entries)):
+        die("No open change record found for %s." % a.entry)
+    base = git("rev-parse", "--verify", "--end-of-options", a.base + "^{tree}").strip() if a.base else worktree_tree(root)
+    state_save(root, {"branch": current_branch(), "entry": a.entry, "base": base, "ctx_shown": {}})
+    print(base)
 
 
 def cmd_lint(a):
@@ -1343,20 +1369,7 @@ def cmd_conflicts(a):
 
 # ───────────────────────── plugin hooks─────────────────────────
 
-WORKFLOW = """[ai-light-work] Change record for {branch}: {ledger}.
-LW = python3 ~/.light-work/lw.py
-When the user asks for edits, follow this order:
-  1. lw-record: record intent in an open entry. Continue it if the intent is the same.
-  2. lw-edit: find the root cause of bugs and keep edits focused. Ask before breaking an active constraint the user has not addressed.
-  3. lw-review: review against the pre-edit snapshot, prepare the visible Review, then record the checkpoint.
-Use lw-check when regression evidence is needed. Pass the starting tree and entry ID for internal reviews and checks.
-Manual calls default to the latest entry and also accept C-xxx, all, or branch.
-Answer questions, read code and run commands without creating an entry. Use $LW why PATH:LINE to trace prior changes.
-Record labels can be English or legacy Chinese. Keep existing labels when updating an entry. Explain results in the user's language."""
-
-CHANGE_INTENT = re.compile(
-    r"(改|修|bug|报错|不对|不行|有问题|不要|换成|改成|加个|加上|新增|删掉|去掉|调整|优化|重构|实现|支持|兼容|"
-    r"\bfix|\bchange|refactor|\badd\b|remove|update|implement)", re.I)
+WORKFLOW = """[ai-light-work] When the user asks you to edit code, configuration, tests, or development docs in a Git worktree, use lw-record before editing, even for a single-file change. Then use lw-edit and lw-review. Leave read-only requests and unrelated work outside this workflow."""
 
 
 ERR_FILE = os.path.expanduser("~/.light-work/hook-error.txt")
@@ -1412,23 +1425,6 @@ def install_shim():
         note_error("copy ~/.light-work/lw.py", e)
 
 
-def ledger_branch_ctx(root):
-    """Return the current worktree's change record context."""
-    cfg = load_cfg(root)
-    lp = ledger_path(root)
-    if not os.path.exists(lp):  # Initialize the new branch after an in-session checkout.
-        lp, _ = init_ledger(root, cfg, quiet=True)
-    return cfg, lp
-
-
-def capture(fn, *args):
-    import contextlib, io
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        fn(*args)
-    return buf.getvalue()
-
-
 def rel_to_root(root, path):
     if not path:
         return None
@@ -1477,44 +1473,22 @@ def edited_paths(root, data):
 
 def hook_session_start(root, data):
     install_shim()
-    cfg, lp = ledger_branch_ctx(root)
-    lp, created = init_ledger(root, cfg, quiet=True)
-    text = WORKFLOW.format(branch=current_branch(), ledger=os.path.relpath(lp, root))
-    ns = argparse.Namespace(files=None, limit=12)
-    body = capture(cmd_context, ns).strip()
-    emit("SessionStart", text + "\n\n" + body[:3500])
+    emit("SessionStart", WORKFLOW)
 
 
 def hook_prompt(root, data):
-    _, lp = ledger_branch_ctx(root)
-    st = state_load(root)
-    if st.get("awaiting"):  # Resume closeout reminders when the user replies.
-        st["awaiting"] = False
-        state_save(root, st)
-    entries, _ = parse_ledger(lp)
-    opens = [e for e in entries if e["status"] == "open" and e["type"] != "baseline"]
-    parts = []
-    if opens:
-        parts.append("Open entries: " + "；".join("%s %s (round %d)" % (e["id"], e["title"], max(e["rounds"], 1))
-                                             for e in opens[-3:]))
-    stuck = [e for e in opens if e["rounds"] >= 3]
-    if stuck:
-        parts.append("⚠ %s is at round %d. If the same problem persists, revisit the root cause before editing. "
-                     "Explain the revised approach in the Review card." % (stuck[-1]["id"], stuck[-1]["rounds"]))
-    if CHANGE_INTENT.search(data.get("prompt", "") or ""):
-        parts.append("Use context to decide whether the user is asking for edits. Answer questions and analysis requests without creating an entry. "
-                     "For edits, run lw-record, lw-edit, then lw-review. Continue the existing entry when the intent is the same.")
-    if parts:
-        emit("UserPromptSubmit", "[ai-light-work] " + " ".join(parts))
+    # A new user task must opt in again through lw-record, even with open history.
+    state_clear(root)
 
 
 def hook_pre_edit(root, data):
-    _, lp = ledger_branch_ctx(root)
+    st = state_load(root)
+    if not st:
+        return
     files = edited_paths(root, data)
     if not files:
         return
-    st = state_load(root)
-    entries, _ = parse_ledger(lp)
+    entries, _ = parse_ledger(ledger_path(root))
     act, _ = active_constraints(entries)
     msgs = []
     cached = st.get("ctx_shown")
@@ -1533,40 +1507,24 @@ def hook_pre_edit(root, data):
     if msgs:
         msgs.append("If the edit clearly conflicts with an active constraint the user did not address, ask using lw-edit's format before editing.")
     st["ctx_shown"] = shown
-    if not [e for e in entries if e["status"] == "open" and e["type"] != "baseline"]:
-        msgs.append("No open entry. Use lw-record to capture the intent before editing.")
-    state_save(root, st)
     if msgs:
+        state_save(root, st)
         emit("PreToolUse", "[ai-light-work] " + "\n".join(msgs))
-
-
-def hook_post_edit(root, data):
-    ledger_branch_ctx(root)
-    files = edited_paths(root, data)
-    if not files:
-        return
-    st = state_load(root)
-    st["dirty"] = True
-    state_save(root, st)
 
 
 def hook_stop(root, data):
     if data.get("stop_hook_active"):
         return
-    cfg, _ = ledger_branch_ctx(root)
     st = state_load(root)
-    if not st.get("dirty") or st.get("awaiting"):  # Skip clean edits and pending user decisions.
+    if not st or st.get("awaiting"):
         return
-    segs, _ = resolve_range(root, cfg, "checkpoint")
-    base, cur = segs[0]
-    if git("rev-parse", base + "^{tree}").strip() == cur:
-        state_clear(root)
-        return
-    if st.get("nag_tree") == cur:
+    # Compare only a recorded round, including edits made through shell commands.
+    cur = worktree_tree(root)
+    if cur in (st["base"], st.get("nag_tree")):
         return
     st["nag_tree"] = cur
     state_save(root, st)
-    emit("Stop", extra={"systemMessage": "[ai-light-work] The changes have no closeout yet. Run lw-review to finish."})
+    emit("Stop", extra={"systemMessage": "[ai-light-work] %s has changes with no closeout yet. Run lw-review to finish." % st["entry"]})
 
 
 def cmd_why(a):
@@ -1642,12 +1600,15 @@ def cmd_ask(a):
     """Suppress this round's reminder while waiting for a conflict decision."""
     root = repo_root()
     st = state_load(root)
-    st["awaiting"] = True
-    state_save(root, st)
-    print("✓ Marked as awaiting a user decision")
+    if st:
+        st["awaiting"] = True
+        state_save(root, st)
+        print("✓ Marked as awaiting a user decision")
 
 
 def cmd_hook(a):
+    if a.event == "post-edit":  # Older installed hook configurations may still call this event.
+        return
     try:
         raw = sys.stdin.read() if not sys.stdin.isatty() else ""
         data = json.loads(raw) if raw.strip() else {}
@@ -1665,7 +1626,7 @@ def cmd_hook(a):
             if err:
                 PENDING_ERR.append(err)
         {"session-start": hook_session_start, "prompt": hook_prompt, "pre-edit": hook_pre_edit,
-         "post-edit": hook_post_edit, "stop": hook_stop}[a.event](root, data)
+         "stop": hook_stop}[a.event](root, data)
     except SystemExit:
         pass
     except Exception as e:  # Report the failure on the next prompt without interrupting this session.
@@ -2237,7 +2198,10 @@ def main():
         p.add_argument("--hunks", type=int, default=nh)
         p.add_argument("--json", action="store_true")
         p.set_defaults(fn=fn)
-    sp.add_parser("snapshot", help="Capture the worktree before editing.").set_defaults(fn=cmd_snapshot)
+    p = sp.add_parser("snapshot", help="Capture the worktree before editing.")
+    p.add_argument("--entry", help="Activate a round for an open change entry.")
+    p.add_argument("--base", help="Reuse the original starting tree of an unfinished round.")
+    p.set_defaults(fn=cmd_snapshot)
     p = sp.add_parser("checkpoint"); p.add_argument("--entry"); p.add_argument("--base"); p.add_argument("--force", action="store_true")
     p.set_defaults(fn=cmd_checkpoint)
     p = sp.add_parser("conflicts"); p.add_argument("--json", action="store_true")

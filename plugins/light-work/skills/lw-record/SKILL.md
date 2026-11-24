@@ -1,13 +1,13 @@
 ---
 name: lw-record
-description: Record the user's intent and constraints before making authorized changes.
+description: Record intent and a starting snapshot before editing code, configuration, tests, or development docs in a Git worktree, including single-file changes.
 ---
 
 # lw-record: Capture intent before editing
 
-Use this skill when the user asks for changes. Answer questions or read code without creating an entry. Then hand the changes to `lw-edit` and the closeout to `lw-review`.
+Use this skill when the user wants an actual development edit in a Git worktree. Judge by the request and the file's role. Fixing one function or updating an API reference qualifies. Explaining that function, writing a code example in chat, or polishing an article in the repository stays outside the workflow. Hand the recorded round to `lw-edit` and the closeout to `lw-review`.
 
-`LW = python3 ~/.light-work/lw.py`. The plugin creates a branch-local record at `.light-work/<branch>.md`. Use `$LW context --files <paths>` for active constraints.
+`LW = python3 ~/.light-work/lw.py`. Run `$LW init` when starting development on a branch to prepare its local record at `.light-work/<branch>.md`. Use `$LW context --files <paths>` for active constraints.
 
 ## Choose the entry
 
@@ -38,4 +38,6 @@ Keep the user's wording where it defines the intent. Prefer one to three testabl
 
 New entries use the English field labels above. When updating a legacy entry, keep its existing labels and use the same language for any new fields on that entry. Use the user's language for the entry's content.
 
-After recording the intent and before editing, run `$LW snapshot`. Pass that tree SHA and the entry ID through editing and automatic review. Take a fresh starting snapshot for each round.
+After recording or updating the entry and before editing, run `$LW snapshot --entry C-xxx` to activate the round and capture its starting tree. Pass that tree SHA and entry ID through editing and automatic review. Take a fresh snapshot for each new round.
+
+A new user message ends hook activation. When the user is continuing the same unfinished round, use `$LW snapshot --entry C-xxx --base TREE` with the known starting tree if the intervening work still belongs to that round. An open entry alone does not activate hooks.
