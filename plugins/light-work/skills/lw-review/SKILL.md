@@ -29,6 +29,8 @@ Check each affected constraint against the selected diff. Cite the source. In au
 
 Resolve the CLI's flags in context. Open candidate callers to confirm real references. Check whether existing tests cover the behavior. Verify changes outside the intended scope and record any necessary files in the current entry.
 
+In automatic review, add needed comments for changed behavior and non-obvious contracts, and update comments made inaccurate by the edit. Do not require comments for self-explanatory code.
+
 ## Complete the entry during automatic review
 
 Update actual `Files`, executed `Verification`, `Rounds`, and `Level` (maximum across rounds). For bugs, add the confirmed `Root cause` and source location. Change constraints only when the user changes the intent. Use the entry's existing field labels when updating legacy records. Run `$LW lint`. Git normally links commits and settles reviewed entries when the commit matches their checkpoint.
