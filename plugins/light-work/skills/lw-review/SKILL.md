@@ -1,104 +1,78 @@
 ---
 name: lw-review
-description: 审阅代码改动。说明改了什么，支持单条、全部改动记录和分支合入报告。
+description: Explain code changes with evidence and create reports for one entry, all recorded changes, or a branch merge.
 argument-hint: "[C-xxx | all | branch]"
 ---
 
-# lw-review：审阅代码改动
+# lw-review: Explain what changed and why it matters
 
-说明改动意图、关键变化和影响面，给出便于人工审阅的结论。准备合入时用 `branch`，想集中查回归问题和验证缺口时用 `lw-check`。
+Use `lw-check` for a focused regression investigation. Use `lw-review` for a user-facing closeout or merge report.
 
-`LW = python3 ~/.light-work/lw.py`
+`LW = python3 ~/.light-work/lw.py`.
 
-## 1. 选择审阅范围
+## Select the scope
 
-| 调用方式 | 取材料 |
+| Invocation | Evidence |
 |---|---|
-| 手动，无参数 | `$LW review`，改动记录中最近一条 |
-| 手动，指定条目 | `$LW review C-xxx`，该条已收尾的各轮改动 |
-| 手动，`all` / `a` | `$LW review all`，全部改动记录条目已收尾的改动 |
-| 手动，`branch` / `b` | `$LW review branch --hunks 10`，全分支合入报告 |
-| 编辑流程调用 | `$LW review --base <本轮编辑前的 tree SHA> --current-entry C-xxx`，本轮正在做的改动 |
+| Manual, no arguments | `$LW review` for the latest entry |
+| Manual, a specific entry | `$LW review C-xxx` for that entry's completed rounds |
+| Manual, `all` or `a` | `$LW review all` for all recorded completed rounds |
+| Manual, `branch` or `b` | `$LW review branch --hunks 10` for merge review |
+| From the editing workflow | `$LW review --base <starting tree SHA> --current-entry C-xxx` for the current round |
 
-手动调用读 `$ARGUMENTS`，宿主未展开时取命令名后面的内容。手动无参固定取最近一条。缺少收尾点时说明该条 diff 暂不可用。`all` 中暂无收尾点的条目单独说明。编辑流程应传入 lw-record 留下的本轮起点和实际条目号，缺少起点时说明无法核实本轮范围。
+Read manual arguments from `$ARGUMENTS` or the command text. If a starting tree or checkpoint is missing, explain which diffs cannot be verified. Resume an unfinished round with its original starting tree and entry ID if the worktree has not changed in the meantime.
 
-用户要求继续上一轮未完成的收尾时，如果上下文仍保留该轮的条目号和编辑前快照，且其后没有其他改动，可接着执行本轮审阅与收尾。
+Use the computed level. Raise it by one level only with a concrete reason. Manual review reports findings and can render a page without changing entries or checkpoints.
 
-级别以脚本为准。有明确理由时可以上调一级，在卡片里说明；不能下调。
+## Verify constraints
 
-## 2. 核对约束
+Check each affected constraint against the selected diff. Cite the source. In automatic review, fix regressions introduced by this round and review again. Bring an actual requirement conflict to the user. Describe a validation gap with the affected scenario and needed evidence.
 
-脚本列出的约束要结合所选 diff 核对。手动审阅仅报告问题和建议，查看当前代码时要区分后续改动。下面的修复和改动记录更新步骤只用于自动审阅。
-- ✓ 仍成立：给出 `文件:行`
-- ✗ 被这次改坏了：是你带坏的就**当场修好**，然后回到第 1 步；是用户新要求和旧约束冲突，放进"待你拍板"
-- ? 从代码判断不了：放进"待你拍板"
+Resolve the CLI's flags in context. Open candidate callers to confirm real references. Check whether existing tests cover the behavior. Verify changes outside the intended scope and record any necessary files in the current entry.
 
-脚本给出的 ⚠ 也要回应：
-- 删了还有人引用的符号：修好
-- 改了不属于本条的文件：要么是本次需要的（补进条目），要么在卡片里说明是顺手改的
-- 改了逻辑却没动测试：核对已有测试是否覆盖改动。只有具体缺口影响本次判断时，才在本轮报告里写明影响
+## Complete the entry during automatic review
 
-脚本列出「一层调用方」时（这些文件没改，但调用了你改过内部逻辑的函数）：打开调用处看一眼。会受影响就写进卡片的影响面，或者当场修好；同名误报直接忽略。不用为它升级别。
+Update actual `Files`, executed `Verification`, `Rounds`, and `Level` (maximum across rounds). For bugs, add the confirmed `Root cause` and source location. Change constraints only when the user changes the intent. Use the entry's existing field labels when updating legacy records. Run `$LW lint`. Git normally links commits and settles reviewed entries when the commit matches their checkpoint.
 
-## 3. 补全条目（仅自动）
+## Prepare the visible Review
 
-更新 lw-record 写的那一条：
-- `文件`：按实际改动修正
-- `约束`：以用户确认的意图为准，用户明确调整要求时才更新
-- `验证`：只写实际跑过的命令和结果，如 `✓ pnpm test voice → 16 passed` 或 `✗ pnpm test voice → emptyResult 失败`。没有执行记录写「—」
-- `根因`（bug）：一句话加 `文件:行`
-- `过程`：本轮做了什么，如 `R2 网络错误改回 error 态`
-- `级别`：脚本给出的结果（多轮取最大值）
+Use [the card template](references/cards.md). One entry or round gets the label `Review · C-xxx · Lx`. L0 and L1 use chat, L2 uses chat with optional HTML, and L3 and branch reviews use HTML. For `all`, group related changes and show their evidence, risks, and validation. Branch review includes initial development and worktree changes.
 
-状态通常自动维护：提交内容与条目的收尾快照相符时，插件会回填提交并标成已定稿。归属证据不足时保留现状。用户明确说"可以""就这样"时，也可以直接改成 `settled`。然后运行 `$LW lint`，有问题就改到通过。
+Make the outcome legible to someone taking over. Start with the result, whether the constraints hold, and anything the user needs to decide. For each important scenario, explain the trigger, key path before and after, observable result, and evidence. Cover meaningful failures, cancellation, retries, compatibility, and shared state when they change the outcome. Use the same range for both versions. Report unrun checks only when they limit a conclusion.
 
-## 4. 准备用户可见的审阅结果
+For L2, L3 and branch reviews with meaningful branches, ordering, state changes, or cross-module effects, put one main diagram just after the conclusion. Use a flowchart for decisions, a sequence diagram for ordering, and a dependency diagram for module relationships. L2 chat can use text arrows. A simple change can use a sentence and a source reference.
 
-- 单条和本轮改动按级别套用 `references/cards.md`。最终回复用 `Review · C-xxx · Lx` 标明条目和级别。
-- L0、L1 在聊天中交付短卡片。L2 默认在聊天中写清改前、改后和影响面，按需附证据网页。
-- L3 和分支合入审阅生成 HTML。用与取证相同的范围运行 `view`，确认命令成功、文件存在且页首显示正确范围。最终回复给出结论和可点击的本地报告链接。
-- 网页生成或核验失败时，准备完整的聊天审阅（结论、改前与改后、证据和验证边界），说明失败原因，再继续收尾。
-- `all` 按主题归并已记录的改动，注明关联条目、关键证据、回归风险和验证情况。
-- `branch` 生成合入报告，包含合入结论、关键改动、建议先看的位置、风险和回归清单。审阅范围包括原始开发、后续变更和工作区差异。
-
-- 最上面三行是结论：**改了什么、约束还成不成立、需要用户做什么**
-- 以接手的人能否读懂行为为准。按场景说明触发条件、改前和改后走过的关键路径、可观察的结果和影响，并给出对应证据。用同一范围的前后版本核对，区分最终行为和已撤回的中间方案。
-- 改动共用同一数据、状态或条件时，说明一处变化如何影响另一处。涉及异常、取消、重试或兼容路径时，交代会影响使用或维护的关键分支。
-- 有未执行的检查会影响本次验收判断时，仅在本轮报告里写清它涉及的场景和结论边界
-- L2、L3 和分支审阅涉及实际分支、时序、状态或跨模块影响时，默认在结论后放一张主图。选用 `flow` 流程图、`sequence` 时序图或 `architecture` 关系图。L2 聊天可直接用文本箭头表达。简单改动用一句话和证据说清即可。
-- lw-edit 里的"顺带发现"放在最后一行
-
-生成网页时，手动无参用 `--scope latest`，指定条目用 `--scope C-xxx`，全部用 `--scope all`，全分支用 `--scope branch`。自动审阅用 `--base 起点SHA --current-entry 条目号`。改动记录原文默认折叠，无需在正文复制。
+Render HTML with the same scope as the review: `--scope latest`, `--scope C-xxx`, `--scope all`, or `--scope branch` for manual use. In automatic review pass `--base <starting tree SHA> --current-entry C-xxx`.
 
 ```bash
-$LW view --scope C-005 --title "改动审阅" <<'LW_REPORT'
-## 结论
+$LW view --scope C-005 --title "Task acknowledgment review" <<'LW_REPORT'
+## Conclusion
 
-说明最重要的行为变化、验证结论和待确认项。
+A task is acknowledged after its result is written. A write failure leaves it eligible for retry.
 
-## 关键路径
+## Key path
 
 ```flow
-收到任务回执 -> 标记任务完成 | 写入成功
-收到任务回执 -> 保留任务以便重试 | 写入失败
+Process a task -> Acknowledge task | Write succeeded
+Process a task -> Retain task | Write failed
 ```
 
-## 改前与改后
+## Before and after
 
-| 场景与触发 | 改前 | 改后 | 结果与影响 | 证据 |
-|---|---|---|---|---|
-| 处理任务时写入失败 | 仍确认任务 | 保留任务并等待重试 | 后续可以重新处理 | 用反引号包住文件和行号 |
-
-多项改动共用状态或数据时，补一句它们如何影响彼此。
+| Scenario | Before | After | Outcome and evidence |
+|---|---|---|---|
+| Writing a task result fails | The task was acknowledged | The task remains eligible for retry | Cite the real source location in backticks |
 LW_REPORT
 ```
 
-## 5. 记录收尾点（仅自动）
+Check that the command succeeded, the file exists, and the header shows the correct scope. Give the final reply a short conclusion and a clickable local report link. If generation or verification fails, deliver the full review in chat and say why the page could not be delivered.
 
-准备好最终回复中的审阅卡片再保存收尾点。需要网页时，先核验报告并准备链接；失败时先准备完整的聊天审阅。保存收尾点后，在最终回复交付第 4 步准备的内容。
+## Record the checkpoint during automatic review
+
+Prepare the visible review and verify any required HTML before running:
 
 ```bash
-$LW checkpoint --entry C-005 --base <本轮编辑前的 tree SHA>
+$LW checkpoint --entry C-005 --base <starting tree SHA>
 ```
 
-使用与本轮 `review` 相同的起点和 lw-record 的条目号，让手动审阅和检查能准确取出这一轮的 diff。
+Use the same entry ID and starting tree as the review. Deliver the prepared card and report link in the final reply.

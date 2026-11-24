@@ -1,54 +1,41 @@
 ---
 name: lw-record
-description: 记录改动意图。用户确认要改代码时，动手前记录意图和约束。
+description: Record the user's intent and constraints before making authorized changes.
 ---
 
-# lw-record：先记下用户要什么，再动代码
+# lw-record: Capture intent before editing
 
-趁用户的原话还没被你的实现"带偏"，先把要改什么记下来。之后交给 `lw-edit`，最后由 `lw-review` 收尾。全程不问用户，唯一的例外见第 3 步。纯问答、读代码和解释直接回答。
+Use this skill when the user asks for changes. Answer questions or read code without creating an entry. Then hand the changes to `lw-edit` and the closeout to `lw-review`.
 
-`LW = python3 ~/.light-work/lw.py`。改动记录是当前分支的 `.light-work/<分支>.md`，插件已经自动建好。
+`LW = python3 ~/.light-work/lw.py`. The plugin creates a branch-local record at `.light-work/<branch>.md`. Use `$LW context --files <paths>` for active constraints.
 
-## 1. 看现状
+## Choose the entry
 
-会话开始时插件已经给过改动记录摘要；需要看某些文件相关的约束时：`$LW context --files <文件>`。
+- **Same intent, still open:** update the existing entry and append the next round number to `Rounds`.
+- **Same intent, already settled:** open a new entry with `Related: relates C-xxx`.
+- **New intent:** use `$LW next-id` and open a new entry.
+- **Replacing an existing constraint:** use a new entry with `Related: supersedes C-xxx.n`. Keep the earlier entry as written.
+- **Formatting, renames, or dependency updates:** use `chore`. Constraints are optional for chores.
 
-## 2. 新开、续改还是推翻
+Ask before an edit would clearly break an active constraint the user did not address. Use the short conflict format in `lw-edit`. Handle implementation conflicts during editing.
 
-| 情况 | 做法 |
-|---|---|
-| 用户在纠正或继续同一件事（"还是不对""再改一下"） | 更新那条 open 条目：`过程` 追加 `R2 …`，按最新说法改写 `意图` 和 `约束` |
-| 同一件事，但那条已经提交（settled） | 新开一条，写 `关联: relates C-xxx` |
-| 新问题或新需求 | `$LW next-id` 取编号，新开一条 |
-| 推翻了以前定下的约束 | 新开一条，写 `关联: supersedes C-xxx.n`，旧条目不改 |
-| 只是格式化、改名、升级依赖 | 类型写 `chore`，可以不写约束 |
-
-## 3. 冲突先问
-
-用户的要求本身会让某条已有约束明确不成立、而用户没提到它时，按 `lw-edit` 里的格式问一句（编号选项，回个数字就行）。改代码过程中才发现的冲突，交给 lw-edit 处理。
-
-## 4. 写条目（追加到改动记录末尾）
+## Write the entry
 
 ```markdown
-### C-005 · 2026-11-20 · change · open · 空结果展示引导文案
-- 意图: 用户："没识别到就提示换个说法，别报错" → 识别为空时展示引导文案，不进 error 态
-- 约束:
-  - C-005.1 识别结果为空时渲染 EmptyTip，不进入 error 态
-  - C-005.2 网络错误仍然进入 error 态
-- 假设: 文案先写死在前端
-- 文件: src/search/voice.ts, src/search/EmptyTip.tsx
-- 验证: —
-- 过程: R1 提出
-- 级别: 待定
+### C-005 · 2026-11-20 · change · open · Show guidance for an empty result
+- Intent: The user wants an empty result to offer guidance without entering the error state.
+- Constraints:
+  - C-005.1 An empty result shows guidance and stays out of the error state.
+  - C-005.2 Network errors still enter the error state.
+- Assumptions: The guidance uses a fixed message.
+- Files: src/search/result.ts, src/search/empty-state.ts
+- Verification: —
+- Rounds: R1 Requested
+- Level: Pending
 ```
 
-- **意图**：保留用户原话里的关键词，再用一句话写清楚要什么。以后查"当时为什么这么定"就靠它
-- **约束**：改完之后应该成立的行为，1~3 条，要能从代码判断对错。✗ "处理好空值"；✓ "空数组时返回 []，不抛异常"。这是以后防止改坏的依据
-- **假设**：你为了能动手而自己做的决定，没有就写"无"
-- **文件**：预计要改的文件，lw-review 时按实际改动修正。插件靠它把约束和文件对上
-- 类型是 `bug` 时加一行 `- 根因: 待查`；需要时加 `- 关联: …`
-- 类型只能是 `bug / change / refactor / chore`
-- `提交` 不用写，`git commit` 时插件会自动补上
-- 不写密钥、token、用户数据
+Keep the user's wording where it defines the intent. Prefer one to three testable behavior constraints. List only assumptions used to proceed. Add `Root cause: Pending` for bugs. Use `bug`, `change`, `refactor`, or `chore`. Git backfills `Commit` when it can verify ownership. Keep secrets and personal data out of the record.
 
-写完条目后、编辑代码前，运行 `$LW snapshot` 并保留返回的 tree SHA。把这个 SHA 和本次条目号一起交给 `lw-edit` 与自动 `lw-review`，续改也要为本轮重新取快照。
+New entries use the English field labels above. When updating a legacy entry, keep its existing labels and use the same language for any new fields on that entry. Use the user's language for the entry's content.
+
+After recording the intent and before editing, run `$LW snapshot`. Pass that tree SHA and the entry ID through editing and automatic review. Take a fresh starting snapshot for each round.

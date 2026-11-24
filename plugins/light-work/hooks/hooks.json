@@ -1,5 +1,5 @@
 {
-  "description": "ai-light-work：会话开始自动建改动记录并注入约束；改代码前注入相关约束；改完未收尾时提醒执行 lw-review",
+  "description": "ai-light-work: Initialize branch records, inject relevant constraints before edits, and remind the assistant to finish pending reviews",
   "hooks": {
     "SessionStart": [
       { "matcher": "startup|resume|clear|compact",

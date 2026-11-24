@@ -1,47 +1,41 @@
-# Review 卡片模板
+# Review card template
 
-分级决定展开程度。每一级都以接手的人能否读懂行为为准，核对相关约束并写明实际验证情况。单条及本轮用 `Review · C-xxx · Lx` 标明审阅对象。
+Use `Review · C-xxx · Lx` for a single entry or round. Adjust depth to what the next maintainer needs to understand the behavior.
 
-| 级别 | 给读者什么 | 载体 |
+| Level | Content | Delivery |
 |---|---|---|
-| L0 | 一句话交代改动和验证情况 | 聊天 |
-| L1 | 简短结论，加一个关键位置或代码片段。有实际风险时指出 | 聊天 |
-| L2 | 改前与改后、影响面和代码证据。需要对照多个文件或解释流程时加网页 | 聊天，可附网页 |
-| L3 | 在 L2 基础上给建议阅读顺序、必看差异和风险。按需要选图 | 核验同范围的网页，聊天给简短结论和链接 |
+| L0 | Outcome and verification in one concise statement | Chat |
+| L1 | Outcome and one key source location, plus any material risk | Chat |
+| L2 | Before and after behavior, impact, and evidence | Chat, with HTML if useful |
+| L3 | Key path, reading order, material risks, and evidence | Verified HTML with a short chat summary and link |
 
-分支合入报告同样给网页和链接。整条分支的阅读顺序从入口到高风险位置，每一步给一个可定位的文件行号和建议先看的原因。遇到网页生成或核验失败，在聊天中给出完整审阅并说明原因。
+Branch merge reviews also use HTML and a link. If HTML generation or verification fails, give the full review in chat and explain the failure.
 
-## 结论与证据
+## Outcome and evidence
 
-- 开头先说改了什么、验证了什么，以及读者是否需要确认。
-- 按场景写「触发 → 改前与改后的关键路径 → 可观察结果和影响」，在结论附近给出 Git diff 或测试证据。两处改动共用状态、数据或触发条件时，交代它们如何相互影响。
-- 网页正文用反引号包住真实的 `文件:行`。渲染器会优先展示被引用的补丁片段，并标出省略的内容。
-- 写实际执行过的检查。未执行的检查只有影响本次验收判断时才写，说明具体场景和影响。
+- Lead with what changed, what was verified, and any decision the user needs to make.
+- Explain the trigger, before and after paths, and observable result. Show causal links when changes share state, data, or a trigger.
+- Put evidence near the claim. Use backticks around real `PATH:LINE` references so the HTML can link to scoped Git diff rows.
+- State what was actually run. Mention unrun checks when they limit the conclusion.
 
-## 选择图
+## Diagrams
 
-L0、L1 通常用短句。L2、L3 和分支审阅涉及实际分支、时序、状态或跨模块影响时，在结论后放一张主图。节点使用真实的入口、动作和结果，箭头标明发生的条件。节点或箭头可以引用 `文件:行`。
+For substantial branches, ordering, state changes, or dependencies in L2, L3 and branch reviews, use one main diagram after the conclusion. Give each node a real entry point, action, or outcome. Label transitions with actual conditions. Node and transition labels can cite `PATH:LINE`.
 
-每条关系独占一行，使用 `来源 -> 目标 | 说明`。说明可省略。优先画最能解释改动的一小段，长流程可按主题拆分。
-
-流程图适合分支行为或状态流转。单向步骤也可每行写一个步骤。
+Each relationship uses one line in the form `Source -> Target | Optional label`. A flow with no branches can also use one step per line.
 
 ```flow
-检查输入 -> 空结果 | 输入为空
-检查输入 -> 加载详情 | 输入有效
+Process a task -> Acknowledge task | Write succeeded
+Process a task -> Retain task | Write failed
 ```
-
-交互图适合展示调用先后。按实际发生顺序填写每条消息。
 
 ```sequence
-页面 -> 搜索服务 | 请求搜索
-搜索服务 -> 页面 | 返回结果
+Worker -> Store | Write result
+Store -> Worker | Confirm write
+Worker -> Queue | Acknowledge task
 ```
 
-架构图适合展示模块职责和依赖。相同来源的关系会归到一起。
-
 ```architecture
-搜索页 -> 搜索服务 | 查询
-搜索服务 -> 缓存 | 读取已有结果
-搜索服务 -> API 客户端 | 缓存未命中时请求
+Worker -> Store | Persist results
+Worker -> Queue | Claim and acknowledge tasks
 ```

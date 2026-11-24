@@ -1,49 +1,43 @@
 ---
 name: lw-edit
-description: 实施代码改动。记录后按范围修改，核对相关约束。
+description: Make focused changes within the recorded intent and verify the affected behavior.
 ---
 
-# lw-edit：像靠谱的同事那样改代码
+# lw-edit: Make the smallest change that solves the problem
 
-三件事：**只改该改的、改一处不坏别处、写清楚为什么。** 下面这些在心里过一遍就行，不需要输出给用户。
+## Before editing
 
-## 动手前
+- Read the injected constraints or run `python3 ~/.light-work/lw.py context --files <paths>`.
+- For a bug, trace the wrong behavior to its source. Use `python3 ~/.light-work/lw.py why PATH:LINE` to understand why a suspicious line exists.
+- Check callers and consumers of the functions, types, and values you plan to change.
 
-- 看插件注入的约束（或运行 `python3 ~/.light-work/lw.py context --files <文件>`），这些是不能悄悄改掉的行为。
-- 找到真正该改的那一处。修 bug 时，要找到坏值是从哪来的，在源头修，不在症状处加 `try/catch` 或特判绕开。
-- 定位到可疑的那几行后，跑 `python3 ~/.light-work/lw.py why 文件:行`：看它是哪条改动引入的、当时的意图和约束、后来有没有被推翻。别把以前特意定下的行为当成 bug 修掉。
-- 要改的函数、类型被别处用到，先 `grep` 调用方。
+If the edit would clearly break an active constraint the user did not address, run `python3 ~/.light-work/lw.py ask` and ask one concise question. Constraints the user is actively revising in the same open entry can be updated there.
 
-**和约束明显冲突时先问。** 改法会让某条约束明确不成立，用户这次又没提到这个行为（同一件事前几轮自己定的约束除外），就先运行 `python3 ~/.light-work/lw.py ask`，然后一句话问完：
-
-```
-⚠ 这次改动和改动记录冲突，确认一下：
-C-003.1「空字符串返回 reason=empty」→ 这次会变成 reason=fail
-  1 按新的改，C-003.1 作废（推荐）  2 保留，空字符串单独处理  3 这处先不动
+```text
+This change conflicts with C-003.1: empty input currently returns reason=empty.
+1. Use reason=fail and replace C-003.1
+2. Keep reason=empty for empty input
+3. Leave this part unchanged
 ```
 
-用户回一个数字就行。拿不准、只是"可能有影响"的不问，记进条目的 `假设`。用户选了"作废"，就在条目里写 `关联: supersedes C-003.1`。
+Record a confirmed replacement as `Related: supersedes C-003.1`. Keep uncertainty in the entry's assumptions and report it only when it affects the conclusion.
 
-## 动手时
+## During the change
 
-1. **每一行改动都能对应到这次的需求。** 对应不上的不改：不顺手重构、不改名、不调格式、不升级依赖。看到别的问题，放进卡片的"顺带发现"。
-2. **不过度。** 能改一行就不改一个函数；不加用不上的参数、配置和抽象。
-3. **不动公开签名和兼容逻辑**（导出函数的参数、接口字段、fallback、老版本分支），除非需求就是要改；要改就把调用方一起改完。
-4. **改判断条件时读完整个分支**，别把 else 和后面分支的行为带歪。
-5. **跟着原文件的写法**：缩进、命名、错误处理都照现有代码来。
+- Keep every edit tied to the request. Preserve public signatures and compatibility paths unless the request changes them. If they change, update affected callers.
+- Read the complete branch when changing a condition. Check the surrounding success and failure paths.
+- Follow the project's names, formatting, and error-handling conventions. Avoid incidental refactors, formatting, dependency changes, or new abstractions.
 
-## 注释
+## Comments
 
-新增或实质修改核心逻辑时，主动补足第一次接手的人需要的信息。按读者会在哪里查找信息来安排：
+When adding or materially changing core logic, give the next reader the context they need to understand the behavior.
 
-- **职责说明**放在模块、类型或功能入口处。说明它负责什么、边界在哪里，以及由谁管理状态或资源。
-- **调用约定**放在公开接口或重要函数旁。说明关键输入的含义、调用条件、结果和失败行为，以及写入、重试或清理等副作用。
-- **关键过程和原因**放在复杂逻辑旁。说明分支、执行顺序或状态转换做什么，以及必须遵守的业务和兼容约定。例如「写入成功后再确认任务。写入失败时保留任务供重试」。
+- **Responsibility:** At a module, type, or feature entry point, explain its role, boundary, and ownership of state or resources.
+- **Contract:** At a public interface or important function, explain meaningful inputs, call conditions, failure behavior, and side effects such as writes, retries, or cleanup.
+- **Key paths and reasons:** Near complex logic, explain what a branch, sequence, or state transition does and which product or compatibility rule it protects. For example, acknowledge a task after persistence succeeds. On failure, leave it available for retry.
 
-详略以读者能理解行为为准。简单取值和转发由清晰的命名表达，注释保留代码和类型难以直接表达的信息。同步修正因本轮改动失效的旧注释，沿用项目已有的注释格式和语言。避免在注释中写入变更日志、改动记录编号或 AI 操作。删减代码时，避免把旧实现留作注释。
+Use the depth the reader needs. Clear names can explain simple assignments and forwarding. Update comments invalidated by the edit and follow the project's comment style and language. Keep change logs, entry IDs, AI notes, and commented-out implementations out of code comments.
 
-## 改完
+## Finish
 
-- 跑一项成本最低的相关检查（如单测、类型检查或 lint）。把实际执行的命令和结果写进 `验证`，没执行则保留「—」。需要用户确认的具体风险写在本轮报告里。
-- 同一个问题改到第 3 轮还没好，就停下来：多半是修错了地方。重新找根因，并在卡片里告诉用户换了思路。bug 的根因用一句话加 `文件:行` 写进条目的 `根因`。
-- 不要直接回复"改好了"，交给 `lw-review`。
+Run the least costly relevant verification and record the actual command and result. If the same bug is still unresolved on the third round, revisit the root cause and explain what changed in the approach. Record the confirmed cause with a `PATH:LINE` reference. Hand off to `lw-review` with the starting snapshot and entry ID.

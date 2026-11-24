@@ -3,12 +3,12 @@
   "owner": {
     "name": "fahcode"
   },
-  "description": "让日常 AI 编码更轻、更稳的插件集合",
+  "description": "Plugins for lightweight, reliable AI-assisted coding",
   "plugins": [
     {
       "name": "light-work",
       "source": "./plugins/light-work",
-      "description": "按分支自动维护的改动记录 + 手术刀式修改 + L0-L3 review 卡片 + 冲突检查与可视化报告"
+      "description": "Branch-local change records, focused edits, scoped regression checks, and offline review reports"
     }
   ]
 }

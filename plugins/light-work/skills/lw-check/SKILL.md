@@ -1,51 +1,37 @@
 ---
 name: lw-check
-description: 检查回归和验证缺口。可检查单条、全部改动记录或全分支。
+description: Check for regressions and verification gaps in one entry, all recorded changes, or the full branch.
 argument-hint: "[C-xxx | all | branch]"
 ---
 
-# /lw-check：检查代码改动
+# lw-check: Find regressions with evidence
 
-核对改动是否破坏行为或已有约束，指出要修的问题、证据和验证缺口。想看改了什么或生成合入报告时用 `lw-review`。
+Use this skill for a focused regression check. Use `lw-review` to explain changes or generate a merge report.
 
-## 1. 选择检查范围
+## Select the scope
 
-`LW = python3 ~/.light-work/lw.py`。手动参数来自 `$ARGUMENTS`，宿主未展开时取命令名后的内容。
+`LW = python3 ~/.light-work/lw.py`. Read manual arguments from `$ARGUMENTS`, or from the command text if the host does not expand it.
 
-| 调用方式 | 取材料 |
+| Invocation | Evidence |
 |---|---|
-| 手动，无参数 | `$LW check`，改动记录中最近一条 |
-| 手动，指定条目 | `$LW check C-xxx`，该条已收尾的各轮改动 |
-| 手动，`all` / `a` | `$LW check all`，全部改动记录条目已收尾的改动 |
-| 手动，`branch` / `b` | `$LW check branch`，全分支，包括最初开发和后续改动 |
-| 编辑流程调用 | `$LW check --base <本轮编辑前的 tree SHA> --current-entry C-xxx`，本轮正在做的改动 |
+| Manual, no arguments | `$LW check` for the latest entry |
+| Manual, a specific entry | `$LW check C-xxx` for that entry's completed rounds |
+| Manual, `all` or `a` | `$LW check all` for all recorded completed rounds |
+| Manual, `branch` or `b` | `$LW check branch` for the full branch, including initial development |
+| From the editing workflow | `$LW check --base <starting tree SHA> --current-entry C-xxx` for the current round |
 
-只在需要专项核对时调用 check，标题标明范围。以选定 diff 为起点，可以读未改动的调用方和相关约束来判断副作用。CLI 的有效文件和引用列表是线索。实际改变行为的文件即使列在「忽略」里，也要读该范围的 Git diff，例如忽略列表中的技能指令。缺少条目收尾点或本轮起点时说明缺少证据。`all` 可用 `$LW conflicts --recorded-only` 补充改动记录条目间的重叠和回退，`branch` 可用 `$LW conflicts`。
+Start from the selected diff. Read unchanged callers and related constraints for context. Inspect behavior-changing files even if the CLI lists them as skipped, such as skill instructions. If the starting tree or checkpoint is missing, explain the evidence gap. For `all`, use `$LW conflicts --recorded-only` for recorded overlap. For `branch`, use `$LW conflicts`.
 
-## 2. 按场景推演，查关联影响
+## Check behavior
 
-1. **先写预期，再找反例。** 从用户意图、有效约束和既有契约确定预期。行为改动至少挑一个本应改变的场景和一个最可能被带坏、应当保留的场景。沿「输入或事件 → 真实入口 → 关键分支或状态 → 输出或副作用」对照改前和改后。纯文案或局部样式核对对应的展示场景即可。
-2. **跟到受影响的使用方。** 核实删除或改签名的符号还有谁用。签名没变也要看语义变化，例如返回值由谁读取、共享状态由谁订阅和清理、重试或回调乱序会不会产生重复写入。按实际变化追到可观察的结果，符号搜索命中后读调用处，按需查事件、配置键或动态注册入口。
-3. **优先验证最能区分对错的场景。** 先找已有的相关用例，确认断言能抓住本次回归。能低成本复现时，用同一输入对照前后版本，同时核对目标行为与需保留的行为。区分实际执行、静态推演和未验证。查历史条目时用对应轮次的前后版本推演，CLI 引用提示来自所选范围最后的结束快照。工作区的测试结果只作为当前版本的证据，版本对不上就说明历史结论的缺口。
+1. **Define expectations, then look for a counterexample.** Use the user's intent, active constraints, and established contracts. For behavior changes pick a target scenario and a scenario most likely to regress. Trace input or event through the real entry point, branch or state, and observable result or side effect. For isolated text or styling changes check the relevant display scenario.
+2. **Follow the effects.** Verify callers of removed or changed symbols. Also look for changed behavior behind an unchanged signature, such as a consumer of a return value, a state subscription, cleanup, or retries causing duplicate writes. Treat search results as hints and open actual call sites.
+3. **Verify what distinguishes success from failure.** Prefer an existing focused test whose assertions would detect the regression. When feasible, use the same input on the before and after versions. Label actual runs, static reasoning, and gaps separately. For historical checks, review the selected snapshots. CLI reference hints use the last end snapshot in scope. Worktree tests apply to the worktree version.
 
-结合场景逐条判定本次范围内的有效约束（✓ / ✗ / ?）。✗ 和 ? 给出 `文件:行` 证据，能定位时指出是哪个条目哪一轮引入的。回退、热点和反复修改 ≥3 轮的条目优先用于选场景。根据所查版本的行为和有效约束判断删改是有意替换还是回归。多条约束在同一处确实互相矛盾时，请用户拍板。全分支检查还要核对未登记改动是否有意。未定稿、历史验证结果和假设只列与结论相关的事实。
+Use reversions, hotspots, and repeated revisions to choose scenarios. Judge active constraints against the selected behavior. Cite `PATH:LINE` for failures and uncertainties, with entry and round if known. Ask about real conflicts between requirements. In branch scope, also inspect unregistered changes. Report relevant verification history and assumptions.
 
-不审代码风格，只看行为。
+## Report the result
 
-## 3. 输出（一屏内）
+Use the scope in the title and keep the result within one screen. For each key finding give the scenario, expected result, actual result, and evidence. List failures first, then gaps, warnings, and passing scenarios. Mention commands and results that were actually run. Include a missing check only if it limits a conclusion. Focus on behavior.
 
-```
-/lw-check · feature/voice-search · 全部已记录改动 · 7 条目 · 12 文件
-✗ 空结果 | 预期展示空态，实际进入成功分支 [已执行] — voice.test.ts › empty result 失败，voice.ts:41（C-006 R2，C-003.1 不成立）
-? 断网后重试 | 预期只提交一次，静态推演可重复调用提交，真机请求行为待验证 — order.ts:58
-✓ 正常结果 | 预期继续展示结果，旧版与当前版均走结果页 [静态推演] — voice.ts:47、results.ts:32
-```
-
-排序 ✗ → ? → ⚠ → ✓。每个关键结论写场景、预期、结果和证据。说明执行的命令与结果，证据来自不同版本时注明版本。未执行的检查只在影响结论时说明具体缺口。全部通过可合成一行，保留关键场景及其证据。
-
-## 4. 之后
-
-列出需要处理的发现。用户要求修复时进入修改流程。
-- 用户同意修：按 lw-record → lw-edit → lw-review 正常流程处理（修复本身也是一条改动记录）
-- 用户对冲突拍板：输的那条用新条目 `supersedes`，不改旧条目
-- 未登记改动确认是有意的：补进对应条目的 `文件`，或开一条 `chore`
+If the user requests a fix, follow `lw-record` → `lw-edit` → `lw-review`. If a conflict is resolved, record the replacement with `supersedes`. If an unregistered change is confirmed intentional, record it in its entry or a new chore.
