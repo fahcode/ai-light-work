@@ -1,13 +1,13 @@
 ---
 name: lw-record
-description: Record intent and a starting snapshot before editing code, configuration, tests, or development docs in a Git worktree, including single-file changes.
+description: Starts a recorded development round before an authorized edit to code, configuration, tests, or development docs in a Git worktree, including single-file edits.
 ---
 
 # lw-record: Capture intent before editing
 
 Use this skill when the user wants an actual development edit in a Git worktree. Judge by the request and the file's role. Fixing one function or updating an API reference qualifies. Explaining that function, writing a code example in chat, or polishing an article in the repository stays outside the workflow. Hand the recorded round to `lw-edit` and the closeout to `lw-review`.
 
-`LW = python3 ~/.light-work/lw.py`. Run `$LW init` when starting development on a branch to prepare its local record at `.light-work/<branch>.md`. Use `$LW context --files <paths>` for active constraints.
+`LW = python3 ~/.light-work/lw.py`. Run `$LW init` if the current branch has no record. Use `$LW context` to find the record at the Git root, or `$LW context --files <paths>` to read constraints for the planned edits.
 
 ## Choose the entry
 

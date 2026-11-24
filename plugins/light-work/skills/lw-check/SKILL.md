@@ -1,12 +1,11 @@
 ---
 name: lw-check
-description: Check for regressions and verification gaps in one entry, all recorded changes, or the full branch.
-argument-hint: "[C-xxx | all | branch]"
+description: Finds regressions and verification gaps in the current round, recorded changes, or a Git branch.
 ---
 
 # lw-check: Find regressions with evidence
 
-Use this skill for a focused regression check. Use `lw-review` to explain changes or generate a merge report.
+Use this skill when asked whether a change works as intended or needs more verification. Use `lw-review` to explain changes or generate a merge report.
 
 ## Select the scope
 
@@ -32,7 +31,7 @@ Use reversions, hotspots, and repeated revisions to choose scenarios. Judge acti
 
 ## Report the result
 
-Apply the [shared output language rule](../lw-review/references/output-language.md).
+Use the user's requested language. Otherwise, follow the current conversation. Quote source evidence as supplied.
 
 Use the scope in the title and keep the result within one screen. For each key finding give the scenario, expected result, actual result, and evidence. List failures first, then gaps, warnings, and passing scenarios. Mention commands and results that were actually run. Include a missing check only if it limits a conclusion. Focus on behavior.
 

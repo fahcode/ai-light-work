@@ -1,12 +1,11 @@
 ---
 name: lw-review
-description: Explain code changes with evidence and create reports for one entry, all recorded changes, or a branch merge.
-argument-hint: "[C-xxx | all | branch]"
+description: Explains development changes with Git evidence for an edit closeout, a requested change summary, or a branch merge report.
 ---
 
 # lw-review: Explain what changed and why it matters
 
-Use `lw-check` for a focused regression investigation. Use `lw-review` for a user-facing closeout or merge report.
+Use this skill after `lw-edit` or when the user asks for a change summary or merge report. Use `lw-check` for a focused regression investigation.
 
 `LW = python3 ~/.light-work/lw.py`.
 
@@ -20,7 +19,7 @@ Use `lw-check` for a focused regression investigation. Use `lw-review` for a use
 | Manual, `branch` or `b` | `$LW review branch --hunks 10` for merge review |
 | From the editing workflow | `$LW review --base <starting tree SHA> --current-entry C-xxx` for the current round |
 
-Read manual arguments from `$ARGUMENTS` or the command text. If a starting tree or checkpoint is missing, explain which diffs cannot be verified. Resume an unfinished round with its original starting tree and entry ID if the worktree has not changed in the meantime.
+Read manual arguments from `$ARGUMENTS` or the command text. If a starting tree or checkpoint is missing, explain which diffs cannot be verified. For automatic closeout, use the entry and starting tree provided by `lw-record`.
 
 Use the computed level. Raise it by one level only with a concrete reason. Manual review reports findings and can render a page without changing entries or checkpoints.
 
@@ -36,36 +35,15 @@ Update actual `Files`, executed `Verification`, `Rounds`, and `Level` (maximum a
 
 ## Prepare the visible Review
 
-Use [the card template](references/cards.md). One entry or round gets the label `Review · C-xxx · Lx`. L0 and L1 use chat, L2 uses chat with optional HTML, and L3 and branch reviews use HTML. For `all`, group related changes and show their evidence, risks, and validation. Branch review includes initial development and worktree changes.
+Use the [card guide](references/cards.md) for delivery by level, evidence, and diagram syntax. For `all`, group related changes by behavior and cover material risks and verification. Branch review includes initial development and worktree changes.
 
-Apply the [shared output language rule](references/output-language.md) to the chat summary and the report.
+Use the user's requested language for the summary, report, and diagram labels. Otherwise, follow the current conversation. Quote source evidence as supplied.
 
-Make the outcome legible to someone taking over. Start with the result, whether the constraints hold, and anything the user needs to decide. For each important scenario, explain the trigger, key path before and after, observable result, and evidence. Cover meaningful failures, cancellation, retries, compatibility, and shared state when they change the outcome. Use the same range for both versions. Report unrun checks only when they limit a conclusion.
+For each material scenario, help the next maintainer follow the change from trigger to observable result. Use the selected diff for both versions. Cover failure, cancellation, retry, compatibility, or shared state when it changes that result.
 
-For L2, L3 and branch reviews with meaningful branches, ordering, state changes, or cross-module effects, put one main diagram just after the conclusion. Use a flowchart for decisions, a sequence diagram for ordering, and a dependency diagram for module relationships. L2 chat can use text arrows. A simple change can use a sentence and a source reference.
+### Render HTML when needed
 
-Render HTML with the same scope as the review: `--scope latest`, `--scope C-xxx`, `--scope all`, or `--scope branch` for manual use. In automatic review pass `--base <starting tree SHA> --current-entry C-xxx`. Set `--lang` to the language chosen for the authored report.
-
-```bash
-$LW view --scope C-005 --lang en --title "Task acknowledgment review" <<'LW_REPORT'
-## Conclusion
-
-A task is acknowledged after its result is written. A write failure leaves it eligible for retry.
-
-## Key path
-
-```flow
-Process a task -> Acknowledge task | Write succeeded
-Process a task -> Retain task | Write failed
-```
-
-## Before and after
-
-| Scenario | Before | After | Outcome and evidence |
-|---|---|---|---|
-| Writing a task result fails | The task was acknowledged | The task remains eligible for retry | Cite the real source location in backticks |
-LW_REPORT
-```
+For L3 and branch reviews, render the report and deliver its link. L2 may include HTML when useful. Feed the report Markdown to `$LW view` on stdin and supply the title with `--title`. Use the same range as the review: manual `--scope latest`, `--scope C-xxx`, `--scope all`, or `--scope branch`. Automatic review uses `--base TREE --current-entry C-xxx`. Pass the [report language tag](references/output-language.md) with `--lang`.
 
 Check that the command succeeded, the file exists, and the header shows the correct scope. Give the final reply a short conclusion and a clickable local report link. If generation or verification fails, deliver the full review in chat and say why the page could not be delivered.
 

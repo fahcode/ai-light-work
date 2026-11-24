@@ -1,6 +1,6 @@
 ---
 name: lw-edit
-description: Make focused changes within the recorded intent and verify the affected behavior.
+description: Implements and verifies authorized development edits after lw-record opens a round.
 ---
 
 # lw-edit: Make the smallest change that solves the problem
@@ -40,4 +40,4 @@ Use the depth the reader needs. Clear names can explain simple assignments and f
 
 ## Finish
 
-Run the least costly relevant verification and record the actual command and result. If the same bug is still unresolved on the third round, revisit the root cause and explain what changed in the approach. Record the confirmed cause with a `PATH:LINE` reference. Hand off to `lw-review` with the starting snapshot and entry ID.
+Run the least costly verification that exercises the affected behavior. Hand the starting snapshot, entry ID, and executed checks and results to `lw-review`. For bugs, also pass the confirmed cause with a `PATH:LINE` reference. Explain any material gap in verification.
